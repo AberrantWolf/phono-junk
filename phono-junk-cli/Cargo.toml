@@ -1,0 +1,16 @@
+[package]
+name = "phono-junk-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "phono-junk"
+path = "src/main.rs"
+
+[dependencies]
+phono-junk-lib.workspace = true
+phono-junk-core.workspace = true
+clap.workspace = true
+log.workspace = true
+env_logger.workspace = true

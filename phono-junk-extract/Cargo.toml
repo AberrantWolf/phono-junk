@@ -1,0 +1,12 @@
+[package]
+name = "phono-junk-extract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+phono-junk-core.workspace = true
+phono-junk-catalog.workspace = true
+junk-libs-disc.workspace = true
+log.workspace = true
+thiserror.workspace = true

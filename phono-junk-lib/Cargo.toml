@@ -1,0 +1,26 @@
+[package]
+name = "phono-junk-lib"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+phono-junk-core.workspace = true
+phono-junk-toc.workspace = true
+phono-junk-identify.workspace = true
+phono-junk-musicbrainz.workspace = true
+phono-junk-discogs.workspace = true
+phono-junk-itunes.workspace = true
+phono-junk-amazon.workspace = true
+phono-junk-accuraterip.workspace = true
+phono-junk-catalog.workspace = true
+phono-junk-db.workspace = true
+phono-junk-extract.workspace = true
+junk-libs-core.workspace = true
+junk-libs-disc.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+toml.workspace = true
+dirs.workspace = true
+log.workspace = true
+thiserror.workspace = true

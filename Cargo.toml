@@ -1,0 +1,81 @@
+[workspace]
+resolver = "2"
+members = [
+    "phono-junk-core",
+    "phono-junk-toc",
+    "phono-junk-identify",
+    "phono-junk-musicbrainz",
+    "phono-junk-discogs",
+    "phono-junk-itunes",
+    "phono-junk-amazon",
+    "phono-junk-accuraterip",
+    "phono-junk-catalog",
+    "phono-junk-db",
+    "phono-junk-extract",
+    "phono-junk-lib",
+    "phono-junk-cli",
+    "phono-junk-gui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+# Sibling junk-libs (https://github.com/AberrantWolf/junk-libs).
+# For faster local iteration with a sibling clone, uncomment the [patch]
+# section at the bottom of this file.
+junk-libs-core = { git = "https://github.com/AberrantWolf/junk-libs" }
+junk-libs-disc = { git = "https://github.com/AberrantWolf/junk-libs" }
+
+# Internal crates
+phono-junk-core = { path = "phono-junk-core" }
+phono-junk-toc = { path = "phono-junk-toc" }
+phono-junk-identify = { path = "phono-junk-identify" }
+phono-junk-musicbrainz = { path = "phono-junk-musicbrainz" }
+phono-junk-discogs = { path = "phono-junk-discogs" }
+phono-junk-itunes = { path = "phono-junk-itunes" }
+phono-junk-amazon = { path = "phono-junk-amazon" }
+phono-junk-accuraterip = { path = "phono-junk-accuraterip" }
+phono-junk-catalog = { path = "phono-junk-catalog" }
+phono-junk-db = { path = "phono-junk-db" }
+phono-junk-extract = { path = "phono-junk-extract" }
+phono-junk-lib = { path = "phono-junk-lib" }
+
+# Third-party
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.12"
+toml = "0.8"
+sha1 = "0.10"
+crc32fast = "1.4"
+md5 = "0.7"
+url = "2"
+log = { version = "0.4", features = ["std"] }
+env_logger = "0.11"
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
+rusqlite = { version = "0.33", features = ["bundled"] }
+dirs = "6"
+chrono = "0.4"
+eframe = "0.30"
+egui = "0.30"
+egui_extras = { version = "0.30", features = ["image"] }
+rfd = "0.15"
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+# ---- Local development override (opt-in) ----
+# Uncomment these four lines when you have a sibling clone of junk-libs at
+# ../junk-libs/ and want Cargo to use the local path instead of fetching
+# from GitHub. Faster iteration; no push-before-test cycle. Cargo errors
+# if the path doesn't exist, so leave commented if you haven't cloned the
+# sibling repo.
+#
+# [patch."https://github.com/AberrantWolf/junk-libs"]
+# junk-libs-core = { path = "../junk-libs/junk-libs-core" }
+# junk-libs-disc = { path = "../junk-libs/junk-libs-disc" }

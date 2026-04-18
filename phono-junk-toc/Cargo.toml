@@ -1,0 +1,11 @@
+[package]
+name = "phono-junk-toc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+phono-junk-core.workspace = true
+junk-libs-core.workspace = true
+junk-libs-disc.workspace = true
+sha1.workspace = true

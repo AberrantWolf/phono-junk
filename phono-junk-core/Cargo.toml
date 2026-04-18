@@ -1,0 +1,10 @@
+[package]
+name = "phono-junk-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+junk-libs-core.workspace = true
+thiserror.workspace = true
+serde = { workspace = true, features = ["derive"] }
