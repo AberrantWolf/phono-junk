@@ -50,6 +50,7 @@ serde_json = "1"
 serde_yml = "0.0.12"
 toml = "0.8"
 sha1 = "0.10"
+base64 = "0.22"
 crc32fast = "1.4"
 md5 = "0.7"
 url = "2"
@@ -57,6 +58,9 @@ log = { version = "0.4", features = ["std"] }
 env_logger = "0.11"
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
+governor = "0.7"
+nonzero_ext = "0.3"
+httpmock = "0.7"
 rusqlite = { version = "0.33", features = ["bundled"] }
 dirs = "6"
 chrono = "0.4"
@@ -76,6 +80,6 @@ lto = "thin"
 # if the path doesn't exist, so leave commented if you haven't cloned the
 # sibling repo.
 #
-# [patch."https://github.com/AberrantWolf/junk-libs"]
-# junk-libs-core = { path = "../junk-libs/junk-libs-core" }
-# junk-libs-disc = { path = "../junk-libs/junk-libs-disc" }
+[patch."https://github.com/AberrantWolf/junk-libs"]
+junk-libs-core = { path = "../junk-libs/junk-libs-core" }
+junk-libs-disc = { path = "../junk-libs/junk-libs-disc" }

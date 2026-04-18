@@ -9,3 +9,4 @@ phono-junk-core.workspace = true
 junk-libs-core.workspace = true
 junk-libs-disc.workspace = true
 sha1.workspace = true
+base64.workspace = true

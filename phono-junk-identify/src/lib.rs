@@ -4,6 +4,15 @@
 //! and [`AssetProvider`] (Cover Art Archive, iTunes, Amazon, future sources).
 //! Aggregation merges results across providers, writes `Disagreement` records
 //! on conflict, and respects user `Override` rows.
+//!
+//! Also the home of the shared rate-limited [`http::HttpClient`] that every
+//! provider constructs and uses. Co-located with the traits because provider
+//! crates can't depend on `phono-junk-lib` (cycle) but all already depend on
+//! this crate.
+
+pub mod http;
+
+pub use http::{HttpClient, HttpClientBuilder, HttpError, HttpResponse};
 
 use phono_junk_core::{AudioError, DiscIds, Toc};
 use serde::{Deserialize, Serialize};

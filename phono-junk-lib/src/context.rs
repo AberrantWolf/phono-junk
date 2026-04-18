@@ -19,18 +19,17 @@ impl PhonoContext {
         }
     }
 
-    /// Register the full day-1 provider set (MB + Discogs + CAA + iTunes + Amazon).
+    /// Register the MVP provider set (MB + CAA + iTunes + Amazon ASIN-direct).
+    ///
+    /// Token-gated providers (Discogs, Amazon PA-API) are deferred post-MVP
+    /// alongside credential persistence. See TODO.md.
     pub fn with_default_providers() -> Self {
         let mut ctx = Self::new();
         ctx.aggregator
             .register_identifier(Box::new(phono_junk_musicbrainz::MusicBrainzProvider::new()));
-        ctx.aggregator
-            .register_identifier(Box::new(phono_junk_discogs::DiscogsProvider::new()));
         ctx.aggregator.register_asset_provider(Box::new(
             phono_junk_musicbrainz::CoverArtArchiveProvider::new(),
         ));
-        ctx.aggregator
-            .register_asset_provider(Box::new(phono_junk_discogs::DiscogsProvider::new()));
         ctx.aggregator
             .register_asset_provider(Box::new(phono_junk_itunes::ITunesProvider::new()));
         ctx.aggregator

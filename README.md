@@ -16,7 +16,11 @@ CLI and GUI stay in feature sync. GUI ships with a pan-script font bundle (NotoS
 
 ## Status
 
-**Early development.** Workspace skeleton compiles; algorithms and providers are scaffolded with traits in place and most implementations pending. See the project's internal plan at `.claude/plans/` or the architecture notes in [CLAUDE.md](CLAUDE.md).
+**Early development.** Workspace skeleton compiles; algorithms and providers are scaffolded with traits in place and most implementations pending.
+
+- [CLAUDE.md](CLAUDE.md) — architecture, dependency graph, conventions
+- [TODO.md](TODO.md) — ordered work queue for the MVP, deferred items, and open questions
+- [`.claude/skills/phono-archive/`](.claude/skills/phono-archive/) — disc-identification and verification algorithm references with upstream citations
 
 ## Build
 

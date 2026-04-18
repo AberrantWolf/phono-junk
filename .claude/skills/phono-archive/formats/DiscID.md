@@ -54,8 +54,8 @@ An 8-hex-digit legacy ID used by the original CDDB/FreeDB service, and still use
 ```
 N = 0
 for each track t = first_track .. last_track:
-    seconds = (track_offset[t] - 150) / 75
-    N += digit_sum(seconds)
+    seconds = track_offset[t] / 75           # absolute MSF seconds, lead-in included
+    N += digit_sum(seconds)                  # single-pass digit sum
 
 T = (leadout_offset - track_offset[first_track]) / 75
 
@@ -63,9 +63,10 @@ cddb_id = ((N mod 0xFF) << 24) | (T << 8) | num_tracks
 ```
 
 Where:
-- `digit_sum(n)` is the sum of the decimal digits of `n`, computed until `n` is reduced to a single decimal digit — i.e. `digit_sum(123) = 1 + 2 + 3 = 6`. Some implementations iterate until single-digit, others sum once; most real-world discs produce identical values either way, but the **iterative sum-until-single-digit** form is what libdiscid implements and is the canonical behavior.
+- `digit_sum(n)` is a **single-pass** sum of the decimal digits of `n`, not iterative-to-single-digit. `digit_sum(1734) = 1 + 7 + 3 + 4 = 15` (we stop there — we do **not** continue with `1 + 5 = 6`). This matches the reference implementation in libdiscid (`src/base64.c` / `src/toc.c`) and cd-discid.
 - `num_tracks = last_track - first_track + 1`
-- The `150`-frame subtraction converts the absolute sector offset into an **LSN** (Logical Sector Number, relative to the start of audio data).
+- `seconds` is derived from the **raw absolute sector offset** divided by 75 — the 2-second lead-in is included. Equivalently: `seconds = minutes * 60 + seconds` where `(minutes, seconds, frames)` is the MSF address of the track's start. **Do not subtract 150 before dividing** — despite the AccurateRip algorithms below using LSN, the FreeDB/CDDB algorithm predates the LSN convention and uses raw MSF seconds.
+- `T` uses the first-track's raw offset too (same rationale as `seconds`).
 
 Output is formatted as 8 lowercase hex digits (some sources uppercase — phono-junk uses lowercase to match `libdiscid::discid_get_freedb_id()`).
 
