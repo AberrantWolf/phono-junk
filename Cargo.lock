@@ -3341,11 +3341,16 @@ dependencies = [
 name = "phono-junk-accuraterip"
 version = "0.1.0"
 dependencies = [
+ "governor",
+ "httpmock",
  "junk-libs-core",
  "junk-libs-disc",
  "log",
+ "nonzero_ext",
  "phono-junk-core",
+ "phono-junk-identify",
  "reqwest",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

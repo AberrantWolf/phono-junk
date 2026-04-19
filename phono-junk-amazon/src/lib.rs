@@ -38,10 +38,7 @@ impl AssetProvider for AmazonProvider {
         &[AssetType::FrontCover]
     }
 
-    fn lookup_art(
-        &self,
-        _ctx: &AssetLookupCtx<'_>,
-    ) -> Result<Vec<AssetCandidate>, ProviderError> {
+    fn lookup_art(&self, _ctx: &AssetLookupCtx<'_>) -> Result<Vec<AssetCandidate>, ProviderError> {
         // Deferred post-MVP: ASIN source (Discogs / user entry) isn't wired yet.
         // See TODO.md ("Amazon provider impl").
         Ok(Vec::new())

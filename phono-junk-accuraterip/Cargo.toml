@@ -6,7 +6,16 @@ license.workspace = true
 
 [dependencies]
 phono-junk-core.workspace = true
+phono-junk-identify.workspace = true
 junk-libs-core.workspace = true
 junk-libs-disc.workspace = true
-reqwest.workspace = true
+thiserror.workspace = true
+governor.workspace = true
+nonzero_ext.workspace = true
 log.workspace = true
+
+[dev-dependencies]
+# arver_live.rs fetches WAV fixtures from github; accuraterip_live.rs uses
+# httpmock + the shared HttpClient for offline status-code coverage.
+reqwest.workspace = true
+httpmock.workspace = true

@@ -5,14 +5,11 @@
 //! `AssetProvider` impl. Live network test is `#[ignore]`-gated.
 
 use phono_junk_core::DiscIds;
-use phono_junk_identify::{
-    AssetLookupCtx, AssetProvider, AssetType, Credentials, ReleaseMeta,
-};
+use phono_junk_identify::{AssetLookupCtx, AssetProvider, AssetType, Credentials, ReleaseMeta};
 use phono_junk_musicbrainz::{CoverArtArchiveProvider, parse_caa_response};
 
 const FIXTURE_FRONT_ONLY: &[u8] = include_bytes!("fixtures/caa_front_only.json");
-const FIXTURE_FRONT_BACK_BOOKLET: &[u8] =
-    include_bytes!("fixtures/caa_front_back_booklet.json");
+const FIXTURE_FRONT_BACK_BOOKLET: &[u8] = include_bytes!("fixtures/caa_front_back_booklet.json");
 
 #[test]
 fn parses_front_only_fixture() {

@@ -19,14 +19,10 @@ Work queue for phono-junk, organized as an ordered sprint list. Each sprint is s
 - [x] **Sprint 7 — AccurateRip CRC v1/v2 + PCM iterator** (`junk-libs-disc/src/pcm.rs`, `phono-junk-accuraterip/src/crc.rs`)
   PCM iterator landed upstream in `junk-libs-disc`: `TrackPcmReader` with `from_bin` / `from_chd` constructors, yielding `Result<[u32; 588], AnalysisError>` per CDDA frame via a shared `sector_to_samples` helper. New `read_chd_raw_sector` primitive extracted so BIN and CHD audio reads share one hunk-decode path. CRC v1 and v2 computed in a single pass via `track_crc_streaming(samples, total_samples, TrackPosition)` with `TrackPosition::{First, Middle, Last, Only}` driving skip bounds. Cross-verified against ARver's `tests/checksums_test.py` fixture CRCs (sample.wav at four positions + silence.wav). Corrected an off-by-one in `.claude/skills/phono-archive/formats/AccurateRip.md` — the reference C implementations include position 2940 (using `multiplier >= skip_frames`), not 2941.
 
-## Sprint queue (implement in order)
+- [x] **Sprint 8 — AccurateRip dBAR fetch + parse** (`phono-junk-accuraterip/{url.rs,dbar.rs,verify.rs,client.rs,error.rs}`)
+  `dbar_url` builds ARver-format URLs from `DiscIds`; `DbarFile::parse` decodes stacked 13-byte headers + 9-byte track entries; `verify_track`/`verify_disc` compare computed `TrackCrc` against a dBAR, guarding against the legacy `v2 == 0` sentinel to avoid spurious zero matches. `AccurateRipClient` wraps `phono-junk-identify`'s shared rate-limited `HttpClient` (1 req/sec on `www.accuraterip.com`) — removes the direct `reqwest` dep and the stub `lookup()`. `fetch_dbar` maps 200→`Some(DbarFile)`, 404→`None`, other→`AccurateRipError::Parse`; `fetch_at_url` exposes the response-dispatch path so `httpmock`-backed tests cover every branch offline. `TrackVerification::status_string` produces the stable short form (`"v2 confidence 8"`, `"v1 confidence 3 (v2 no match)"`, `"no match"`) that will persist to `RipFile.accuraterip_status` once Sprint 10 wires it. Ignored live test fetches a real dBAR end-to-end.
 
-### Sprint 8 — AccurateRip dBAR fetch + parse
-Location: `phono-junk-accuraterip/`
-Depends on: Sprint 1 (id1/id2/cddb), Sprint 3 (HTTP)
-- [ ] dBAR URL construction (`accuraterip.com/accuraterip/<c3>/<c2>/<c1>/dBAR-NNN-<id1>-<id2>-<cddb>.bin`)
-- [ ] Binary parse: 13-byte header + 9-byte per-track entries, little-endian
-- [ ] Tests against stored dBAR bytes
+## Sprint queue (implement in order)
 
 ### Sprint 9 — SQLite schema + migrations
 Location: `phono-junk-db/src/schema.rs`, `phono-junk-db/src/migrate.rs`
@@ -103,6 +99,10 @@ Depends on: Sprint 14
 - [ ] **Multi-FILE CUE PCM iteration (Sprint 7)** — `TrackPcmReader::from_bin` assumes the CUE sheet is backed by a single whole-disc BIN. CDRWin-style CUEs with one BIN per track need a `from_cue(cue_path, &TrackLayout)` constructor that consults FILE directives. Defer until a real multi-FILE CUE fixture surfaces.
 - [ ] **Real-CHD PCM integration test (Sprint 2/7)** — Sprint 2's deferred note promised a real CHD PCM round-trip alongside Sprint 7. The PCM iterator's CHD path has unit coverage but no real-CHD integration test; add one when a usable fixture is available.
 - [ ] **CHD hunk caching for PCM streaming (Sprint 7)** — `TrackPcmReader::from_chd` currently re-opens the CHD file and re-decompresses the target hunk per sector (inherited from existing `read_chd_sector` behaviour). For a 70-minute CD's ~316,000 audio sectors this is a major waste. Fix by caching the current hunk's bytes on the reader, or by holding a long-lived `chd::Chd` handle inside `PcmSource::Chd`. Not blocking MVP correctness; high-value speedup for Sprint 12's batch extract.
+- [ ] **Sample-offset scan for verification (Sprint 8)** — same theme as the Sprint 7 deferred "sample-offset compensation": `verify_track` today checks only the drive-offset-0 CRC. Once the aggregator is live, wrap `verify_disc` with a compensated-sum scan (`SA`/`SB` technique from `AccurateRip.md`) so ±30-sample drive-offset mismatches become verifiable. Belongs between Sprint 8 and Sprint 11.
+- [ ] **Persist dBAR raw bytes on `Disc` (Sprint 8 → Sprint 9)** — Sprint 9's schema should add a `dbar_raw BLOB` column (or a sibling table keyed by discid triple) so the catalog can re-run verification without re-fetching. Parse-from-cache is cheap; re-fetching burns the accuraterip.com quota.
+- [ ] **Register `AccurateRipClient` on `PhonoContext` (Sprint 8 → Sprint 13)** — currently constructed ad-hoc by callers. Add `pub accuraterip: AccurateRipClient` to `PhonoContext` and initialise inside `with_default_providers` once the CLI `verify` subcommand needs it. Trivial; left opportunistic because `PhonoContext`'s public shape is still settling around Sprint 11.
+- [ ] **`VerificationProvider` trait (post-MVP)** — if/when CUETools CTDB joins AccurateRip as a second verification source, extract a `VerificationProvider` trait from `AccurateRipClient` in `phono-junk-identify` (sibling to `IdentificationProvider` / `AssetProvider`). Premature today — one implementation is not a trait.
 
 ## Deferred (post-MVP)
 

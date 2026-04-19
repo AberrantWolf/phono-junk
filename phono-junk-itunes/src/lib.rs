@@ -52,10 +52,7 @@ impl AssetProvider for ITunesProvider {
         &[AssetType::FrontCover]
     }
 
-    fn lookup_art(
-        &self,
-        ctx: &AssetLookupCtx<'_>,
-    ) -> Result<Vec<AssetCandidate>, ProviderError> {
+    fn lookup_art(&self, ctx: &AssetLookupCtx<'_>) -> Result<Vec<AssetCandidate>, ProviderError> {
         // Text search needs album title + artist. The aggregator will usually
         // have populated these from an earlier MB hit; without both, skip.
         let Some(album) = ctx.album else {
@@ -72,16 +69,14 @@ impl AssetProvider for ITunesProvider {
         match resp.status {
             200 => parse_search_response(&resp.body),
             404 => Ok(Vec::new()),
-            code => Err(ProviderError::Other(format!(
-                "itunes returned HTTP {code}"
-            ))),
+            code => Err(ProviderError::Other(format!("itunes returned HTTP {code}"))),
         }
     }
 }
 
 fn build_search_url(term: &str) -> Result<Url, ProviderError> {
-    let mut url =
-        Url::parse(SEARCH_ENDPOINT).map_err(|e| ProviderError::Other(format!("itunes url: {e}")))?;
+    let mut url = Url::parse(SEARCH_ENDPOINT)
+        .map_err(|e| ProviderError::Other(format!("itunes url: {e}")))?;
     url.query_pairs_mut()
         .append_pair("term", term)
         .append_pair("entity", "album")
@@ -93,8 +88,8 @@ fn build_search_url(term: &str) -> Result<Url, ProviderError> {
 /// each hit's 100px artwork URL to 1000px so downloads land the high-res
 /// asset rather than the thumbnail.
 pub fn parse_search_response(bytes: &[u8]) -> Result<Vec<AssetCandidate>, ProviderError> {
-    let resp: json::SearchResponse = serde_json::from_slice(bytes)
-        .map_err(|e| ProviderError::Parse(format!("itunes: {e}")))?;
+    let resp: json::SearchResponse =
+        serde_json::from_slice(bytes).map_err(|e| ProviderError::Parse(format!("itunes: {e}")))?;
     let mut out = Vec::with_capacity(resp.results.len());
     for hit in resp.results {
         let Some(art_url) = hit.artwork_url100 else {

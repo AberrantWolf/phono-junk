@@ -181,7 +181,10 @@ fn compute_disc_ids_populates_all_four_id_fields() {
     use crate::compute_disc_ids;
     let t = toc(1, 3, 336103, &[150, 75408, 130223]);
     let ids = compute_disc_ids(&t);
-    assert_eq!(ids.mb_discid.as_deref(), Some("dUmct3Sk4dAt1a98qUKYKC0ZjYU-"));
+    assert_eq!(
+        ids.mb_discid.as_deref(),
+        Some("dUmct3Sk4dAt1a98qUKYKC0ZjYU-")
+    );
     assert_eq!(ids.cddb_id.as_deref(), Some("19117f03"));
     assert_eq!(ids.ar_discid1.as_deref(), Some("00084264"));
     assert_eq!(ids.ar_discid2.as_deref(), Some("001cc184"));

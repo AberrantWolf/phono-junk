@@ -41,20 +41,14 @@ fn ensure_sparse_file(path: &Path, len: u64) -> io::Result<()> {
 fn setup_arver_3track_bin() -> &'static io::Result<()> {
     static ONCE: OnceLock<io::Result<()>> = OnceLock::new();
     ONCE.get_or_init(|| {
-        ensure_sparse_file(
-            &fixtures_dir().join("arver_3track.bin"),
-            335_953 * 2352,
-        )
+        ensure_sparse_file(&fixtures_dir().join("arver_3track.bin"), 335_953 * 2352)
     })
 }
 
 fn setup_cd_extra_bin() -> &'static io::Result<()> {
     static ONCE: OnceLock<io::Result<()>> = OnceLock::new();
     ONCE.get_or_init(|| {
-        ensure_sparse_file(
-            &fixtures_dir().join("cd_extra_synth.bin"),
-            347_953 * 2352,
-        )
+        ensure_sparse_file(&fixtures_dir().join("cd_extra_synth.bin"), 347_953 * 2352)
     })
 }
 

@@ -66,7 +66,11 @@ fn per_host_bucket_waits_deterministically_with_fake_clock() {
 
     let client = HttpClient::builder()
         .user_agent("test/1.0")
-        .fake_host_quota("127.0.0.1", Quota::per_second(nonzero!(1u32)), clock.clone())
+        .fake_host_quota(
+            "127.0.0.1",
+            Quota::per_second(nonzero!(1u32)),
+            clock.clone(),
+        )
         .build()
         .unwrap();
 
@@ -101,8 +105,16 @@ fn per_host_buckets_are_independent() {
 
     let client = HttpClient::builder()
         .user_agent("test/1.0")
-        .fake_host_quota("127.0.0.1", Quota::per_second(nonzero!(1u32)), clock.clone())
-        .fake_host_quota("localhost", Quota::per_second(nonzero!(1u32)), clock.clone())
+        .fake_host_quota(
+            "127.0.0.1",
+            Quota::per_second(nonzero!(1u32)),
+            clock.clone(),
+        )
+        .fake_host_quota(
+            "localhost",
+            Quota::per_second(nonzero!(1u32)),
+            clock.clone(),
+        )
         .build()
         .unwrap();
 

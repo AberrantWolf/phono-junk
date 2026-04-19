@@ -73,10 +73,7 @@ impl IdentificationProvider for MusicBrainzProvider {
         let url = format!(
             "https://musicbrainz.org/ws/2/discid/{discid}?inc=artists+recordings+release-groups&fmt=json"
         );
-        let resp = self
-            .http
-            .get(&url)
-            .map_err(map_http_err)?;
+        let resp = self.http.get(&url).map_err(map_http_err)?;
         match resp.status {
             200 => parse_discid_response(&resp.body),
             404 => Ok(None),
@@ -222,18 +219,12 @@ impl AssetProvider for CoverArtArchiveProvider {
         ]
     }
 
-    fn lookup_art(
-        &self,
-        ctx: &AssetLookupCtx<'_>,
-    ) -> Result<Vec<AssetCandidate>, ProviderError> {
+    fn lookup_art(&self, ctx: &AssetLookupCtx<'_>) -> Result<Vec<AssetCandidate>, ProviderError> {
         let Some(mbid) = ctx.release.mbid.as_ref() else {
             return Ok(Vec::new());
         };
         let url = format!("https://coverartarchive.org/release/{mbid}");
-        let resp = self
-            .http
-            .get(&url)
-            .map_err(map_http_err)?;
+        let resp = self.http.get(&url).map_err(map_http_err)?;
         match resp.status {
             200 => parse_caa_response(&resp.body),
             404 => Ok(Vec::new()),

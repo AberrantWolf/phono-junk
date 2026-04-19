@@ -68,9 +68,7 @@ pub(crate) fn layout_to_toc(layout: &[TrackLayout]) -> Result<Toc, AudioError> {
             .absolute_offset
             .checked_sub(CD_EXTRA_DATA_OFFSET)
             .ok_or_else(|| {
-                AudioError::InvalidToc(
-                    "CD-Extra data-track offset below lead-in threshold".into(),
-                )
+                AudioError::InvalidToc("CD-Extra data-track offset below lead-in threshold".into())
             })?
     } else {
         let last = audio.last().unwrap();
@@ -97,9 +95,7 @@ fn validate_toc(toc: &Toc) -> Result<(), AudioError> {
         return Err(AudioError::InvalidToc("empty track offsets".into()));
     }
     if toc.first_track > toc.last_track {
-        return Err(AudioError::InvalidToc(
-            "first_track > last_track".into(),
-        ));
+        return Err(AudioError::InvalidToc("first_track > last_track".into()));
     }
     for pair in toc.track_offsets.windows(2) {
         if pair[0] >= pair[1] {

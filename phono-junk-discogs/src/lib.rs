@@ -60,10 +60,7 @@ impl AssetProvider for DiscogsProvider {
         ]
     }
 
-    fn lookup_art(
-        &self,
-        _ctx: &AssetLookupCtx<'_>,
-    ) -> Result<Vec<AssetCandidate>, ProviderError> {
+    fn lookup_art(&self, _ctx: &AssetLookupCtx<'_>) -> Result<Vec<AssetCandidate>, ProviderError> {
         // Deferred post-MVP: requires user token + credential persistence.
         // See TODO.md.
         Ok(Vec::new())

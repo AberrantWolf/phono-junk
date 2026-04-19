@@ -43,9 +43,7 @@ pub fn musicbrainz_discid(toc: &Toc) -> String {
     s.push_str(&format!("{:08X}", toc.leadout_sector));
     for i in 1..=99u8 {
         let idx = i.wrapping_sub(toc.first_track) as usize;
-        let offset = if i >= toc.first_track
-            && i <= toc.last_track
-            && idx < toc.track_offsets.len()
+        let offset = if i >= toc.first_track && i <= toc.last_track && idx < toc.track_offsets.len()
         {
             toc.track_offsets[idx]
         } else {

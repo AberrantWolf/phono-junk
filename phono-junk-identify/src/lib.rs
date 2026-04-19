@@ -190,8 +190,7 @@ pub trait AssetProvider: Send + Sync {
     fn asset_types(&self) -> &[AssetType];
 
     /// Enumerate candidate assets for a release. Caller decides which to pick.
-    fn lookup_art(&self, ctx: &AssetLookupCtx<'_>)
-    -> Result<Vec<AssetCandidate>, ProviderError>;
+    fn lookup_art(&self, ctx: &AssetLookupCtx<'_>) -> Result<Vec<AssetCandidate>, ProviderError>;
 }
 
 /// Aggregator: fans out to registered providers and merges results.

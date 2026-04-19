@@ -16,19 +16,13 @@ fn single_artist_no_joinphrase() {
 
 #[test]
 fn two_artists_with_ampersand_joinphrase() {
-    let credits = vec![
-        credit("Simon", Some(" & ")),
-        credit("Garfunkel", None),
-    ];
+    let credits = vec![credit("Simon", Some(" & ")), credit("Garfunkel", None)];
     assert_eq!(format(&credits), "Simon & Garfunkel");
 }
 
 #[test]
 fn featured_artist() {
-    let credits = vec![
-        credit("Kanye West", Some(" feat. ")),
-        credit("Jay-Z", None),
-    ];
+    let credits = vec![credit("Kanye West", Some(" feat. ")), credit("Jay-Z", None)];
     assert_eq!(format(&credits), "Kanye West feat. Jay-Z");
 }
 

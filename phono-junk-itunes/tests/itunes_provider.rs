@@ -3,8 +3,7 @@
 
 use phono_junk_core::DiscIds;
 use phono_junk_identify::{
-    AlbumMeta, AssetConfidence, AssetLookupCtx, AssetProvider, AssetType, Credentials,
-    ReleaseMeta,
+    AlbumMeta, AssetConfidence, AssetLookupCtx, AssetProvider, AssetType, Credentials, ReleaseMeta,
 };
 use phono_junk_itunes::{ITunesProvider, parse_search_response};
 
@@ -45,8 +44,8 @@ fn invalid_json_maps_to_parse_error() {
 
 #[test]
 fn provider_without_album_title_skips_lookup() {
-    let provider = ITunesProvider::new("phono-junk-tests/0.1 (+tests@example.invalid)")
-        .expect("construct");
+    let provider =
+        ITunesProvider::new("phono-junk-tests/0.1 (+tests@example.invalid)").expect("construct");
     let ids = DiscIds::default();
     let creds = Credentials::new();
     let release = ReleaseMeta::default();
@@ -62,8 +61,8 @@ fn provider_without_album_title_skips_lookup() {
 
 #[test]
 fn provider_without_artist_or_title_skips_lookup() {
-    let provider = ITunesProvider::new("phono-junk-tests/0.1 (+tests@example.invalid)")
-        .expect("construct");
+    let provider =
+        ITunesProvider::new("phono-junk-tests/0.1 (+tests@example.invalid)").expect("construct");
     let ids = DiscIds::default();
     let creds = Credentials::new();
     let release = ReleaseMeta::default();
@@ -85,10 +84,9 @@ fn provider_without_artist_or_title_skips_lookup() {
 #[test]
 #[ignore = "live network"]
 fn live_lookup_against_itunes() {
-    let provider = ITunesProvider::new(
-        "phono-junk-tests/0.1 ( live-smoke-test / tests@example.invalid )",
-    )
-    .expect("construct");
+    let provider =
+        ITunesProvider::new("phono-junk-tests/0.1 ( live-smoke-test / tests@example.invalid )")
+            .expect("construct");
     let ids = DiscIds::default();
     let creds = Credentials::new();
     let release = ReleaseMeta::default();
