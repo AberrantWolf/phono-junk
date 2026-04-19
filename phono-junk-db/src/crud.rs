@@ -190,6 +190,9 @@ pub fn list_albums(conn: &Connection) -> Result<Vec<Album>, DbError> {
 // Release
 // ---------------------------------------------------------------------------
 
+const RELEASE_COLS: &str =
+    "id, album_id, country, date, label, catalog_number, barcode, mbid, status, language, script";
+
 fn row_to_release(row: &Row) -> rusqlite::Result<Release> {
     Ok(Release {
         id: row.get("id")?,
@@ -201,14 +204,16 @@ fn row_to_release(row: &Row) -> rusqlite::Result<Release> {
         barcode: row.get("barcode")?,
         mbid: row.get("mbid")?,
         status: row.get("status")?,
+        language: row.get("language")?,
+        script: row.get("script")?,
     })
 }
 
 pub fn insert_release(conn: &Connection, release: &Release) -> Result<Id, DbError> {
     conn.execute(
         "INSERT INTO releases (album_id, country, date, label, catalog_number,
-                               barcode, mbid, status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                               barcode, mbid, status, language, script)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             release.album_id,
             release.country,
@@ -218,27 +223,26 @@ pub fn insert_release(conn: &Connection, release: &Release) -> Result<Id, DbErro
             release.barcode,
             release.mbid,
             release.status,
+            release.language,
+            release.script,
         ],
     )?;
     Ok(conn.last_insert_rowid())
 }
 
 pub fn get_release(conn: &Connection, id: Id) -> Result<Option<Release>, DbError> {
+    let sql = format!("SELECT {RELEASE_COLS} FROM releases WHERE id = ?1");
     Ok(conn
-        .query_row(
-            "SELECT id, album_id, country, date, label, catalog_number, barcode, mbid, status
-             FROM releases WHERE id = ?1",
-            [id],
-            row_to_release,
-        )
+        .query_row(&sql, [id], row_to_release)
         .optional()?)
 }
 
 pub fn update_release(conn: &Connection, release: &Release) -> Result<(), DbError> {
     conn.execute(
         "UPDATE releases SET album_id = ?1, country = ?2, date = ?3, label = ?4,
-                             catalog_number = ?5, barcode = ?6, mbid = ?7, status = ?8
-         WHERE id = ?9",
+                             catalog_number = ?5, barcode = ?6, mbid = ?7, status = ?8,
+                             language = ?9, script = ?10
+         WHERE id = ?11",
         params![
             release.album_id,
             release.country,
@@ -248,6 +252,8 @@ pub fn update_release(conn: &Connection, release: &Release) -> Result<(), DbErro
             release.barcode,
             release.mbid,
             release.status,
+            release.language,
+            release.script,
             release.id,
         ],
     )?;
@@ -260,10 +266,10 @@ pub fn delete_release(conn: &Connection, id: Id) -> Result<(), DbError> {
 }
 
 pub fn list_releases_for_album(conn: &Connection, album_id: Id) -> Result<Vec<Release>, DbError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, album_id, country, date, label, catalog_number, barcode, mbid, status
-         FROM releases WHERE album_id = ?1 ORDER BY id",
-    )?;
+    let sql = format!(
+        "SELECT {RELEASE_COLS} FROM releases WHERE album_id = ?1 ORDER BY id"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([album_id], row_to_release)?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }

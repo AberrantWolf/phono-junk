@@ -131,6 +131,10 @@ pub struct ReleaseMeta {
     pub catalog_number: Option<String>,
     pub barcode: Option<String>,
     pub mbid: Option<String>,
+    /// ISO 639-3 language code (MB `text-representation.language`).
+    pub language: Option<String>,
+    /// ISO 15924 script code (MB `text-representation.script`).
+    pub script: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

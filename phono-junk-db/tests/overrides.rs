@@ -88,6 +88,8 @@ fn unknown_field_on_release_errors() {
         barcode: None,
         mbid: None,
         status: None,
+        language: None,
+        script: None,
     };
     let err = apply_override(OverrideTarget::Release(&mut r), &[], "weird", "v").unwrap_err();
     assert!(matches!(err, OverrideError::UnknownField { .. }));

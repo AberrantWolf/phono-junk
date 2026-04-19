@@ -15,6 +15,9 @@ path = "src/lib.rs"
 [dependencies]
 phono-junk-lib.workspace = true
 phono-junk-core.workspace = true
+phono-junk-catalog.workspace = true
+phono-junk-db.workspace = true
+rusqlite.workspace = true
 eframe.workspace = true
 egui.workspace = true
 egui_extras.workspace = true

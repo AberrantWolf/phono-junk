@@ -119,6 +119,12 @@ pub fn parse_discid_response(bytes: &[u8]) -> Result<Option<ProviderResult>, Pro
         mbid: release.release_group.as_ref().map(|rg| rg.id.clone()),
     });
 
+    let (language, script) = release
+        .text_representation
+        .as_ref()
+        .map(|tr| (tr.language.clone(), tr.script.clone()))
+        .unwrap_or((None, None));
+
     let release_meta = Some(ReleaseMeta {
         country: release.country,
         date: release.date,
@@ -132,6 +138,8 @@ pub fn parse_discid_response(bytes: &[u8]) -> Result<Option<ProviderResult>, Pro
             .find_map(|li| li.catalog_number.clone()),
         barcode: release.barcode,
         mbid: Some(release.id.clone()),
+        language,
+        script,
     });
 
     let tracks = pick_medium(&release.media)

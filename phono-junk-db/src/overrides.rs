@@ -200,6 +200,8 @@ fn apply_flat_release(
         "barcode" => release.barcode = nullable(value),
         "mbid" => release.mbid = nullable(value),
         "status" => release.status = nullable(value),
+        "language" => release.language = nullable(value),
+        "script" => release.script = nullable(value),
         other => {
             return Err(OverrideError::UnknownField {
                 target: "Release",

@@ -24,6 +24,11 @@ pub struct ListRow {
     pub country: Option<String>,
     /// Label of the first matching release (if any).
     pub label: Option<String>,
+    /// ISO 639-3 language of the first matching release (if any).
+    /// Drives region-aware CJK font selection in the GUI.
+    pub language: Option<String>,
+    /// ISO 15924 script of the first matching release (if any).
+    pub script: Option<String>,
     pub disc_count: usize,
     pub release_count: usize,
 }
@@ -106,6 +111,18 @@ fn row_for_album(conn: &Connection, album: Album) -> Result<ListRow, DbError> {
             }
         })
         .unwrap_or((None, None));
+    let (language, script) = releases
+        .iter()
+        .find_map(|r| {
+            let l = r.language.clone();
+            let s = r.script.clone();
+            if l.is_some() || s.is_some() {
+                Some((l, s))
+            } else {
+                None
+            }
+        })
+        .unwrap_or((None, None));
 
     Ok(ListRow {
         album_id: album.id,
@@ -115,6 +132,8 @@ fn row_for_album(conn: &Connection, album: Album) -> Result<ListRow, DbError> {
         mbid: album.mbid,
         country,
         label,
+        language,
+        script,
         disc_count,
         release_count: releases.len(),
     })
@@ -178,6 +197,8 @@ mod tests {
             mbid: None,
             country: country.map(Into::into),
             label: label.map(Into::into),
+            language: None,
+            script: None,
             disc_count: 1,
             release_count: 1,
         }

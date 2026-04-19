@@ -31,6 +31,8 @@ fn sample_release(album_id: i64) -> Release {
         barcode: Some("724352775316".into()),
         mbid: Some("release-mbid".into()),
         status: Some("Official".into()),
+        language: Some("eng".into()),
+        script: Some("Latn".into()),
     }
 }
 

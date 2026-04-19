@@ -29,6 +29,12 @@ pub struct Release {
     pub barcode: Option<String>,
     pub mbid: Option<String>,
     pub status: Option<String>,
+    /// ISO 639-3 language code from MB `text-representation.language`
+    /// (e.g. `jpn`, `kor`, `zho`, `eng`). Drives CJK font region selection.
+    pub language: Option<String>,
+    /// ISO 15924 script code from MB `text-representation.script`
+    /// (e.g. `Jpan`, `Hans`, `Hant`, `Hang`, `Latn`).
+    pub script: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

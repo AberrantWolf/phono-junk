@@ -40,6 +40,17 @@ pub struct Release {
     pub media: Vec<Medium>,
     #[serde(rename = "release-group", default)]
     pub release_group: Option<ReleaseGroup>,
+    #[serde(rename = "text-representation", default)]
+    pub text_representation: Option<TextRepresentation>,
+}
+
+/// MB `text-representation` block: ISO 639-3 language + ISO 15924 script.
+#[derive(Debug, Deserialize)]
+pub struct TextRepresentation {
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub script: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

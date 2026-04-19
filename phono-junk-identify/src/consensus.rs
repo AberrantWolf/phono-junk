@@ -183,6 +183,18 @@ pub fn merge(results: &[ProviderResult]) -> MergedDisc {
             &rel_values(|r| r.barcode.clone()),
             &mut disagreements,
         ),
+        language: merge_opt(
+            "release.language",
+            DisagreementEntity::Release,
+            &rel_values(|r| r.language.clone()),
+            &mut disagreements,
+        ),
+        script: merge_opt(
+            "release.script",
+            DisagreementEntity::Release,
+            &rel_values(|r| r.script.clone()),
+            &mut disagreements,
+        ),
     };
 
     let tracks = merge_tracks(&cohort, &mut disagreements);

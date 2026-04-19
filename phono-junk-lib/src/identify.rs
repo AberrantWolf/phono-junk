@@ -295,6 +295,8 @@ fn upsert_release(
         barcode: meta.barcode.clone(),
         mbid: meta.mbid.clone(),
         status: None,
+        language: meta.language.clone(),
+        script: meta.script.clone(),
     };
     crud::insert_release(conn, &release)
 }

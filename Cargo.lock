@@ -3549,9 +3549,12 @@ dependencies = [
  "egui_extras",
  "env_logger",
  "log",
+ "phono-junk-catalog",
  "phono-junk-core",
+ "phono-junk-db",
  "phono-junk-lib",
  "rfd",
+ "rusqlite",
  "serde",
 ]
 

@@ -270,6 +270,8 @@ fn seed_one_disc(db_path: &Path) -> (Id, Id, Id) {
             barcode: None,
             mbid: Some("22222222-2222-2222-2222-222222222222".into()),
             status: None,
+            language: None,
+            script: None,
         },
     )
     .unwrap();
@@ -366,6 +368,8 @@ fn insert_album_with_release(
             barcode: None,
             mbid: None,
             status: None,
+            language: None,
+            script: None,
         },
     )
     .unwrap();

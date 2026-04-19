@@ -25,7 +25,7 @@ pub enum SchemaError {
 
 /// Current schema version. Bump freely during development; there is no
 /// migration path yet, so bumping means existing dev DBs must be deleted.
-pub const CURRENT_VERSION: i32 = 1;
+pub const CURRENT_VERSION: i32 = 2;
 
 /// Open (or create) a catalog database at `path`. Sets `journal_mode=WAL`
 /// and `foreign_keys=ON`. Returns `VersionMismatch` if the DB was created
@@ -117,6 +117,10 @@ CREATE TABLE IF NOT EXISTS albums (
 );
 CREATE INDEX IF NOT EXISTS idx_albums_mbid ON albums(mbid);
 
+-- `language` and `script` mirror MB `release.text-representation.{language,script}`:
+-- ISO 639-3 language code (e.g. `jpn`, `kor`, `zho`, `eng`) and ISO 15924
+-- script code (e.g. `Jpan`, `Hans`, `Hant`, `Hang`, `Latn`). Drives
+-- region-aware CJK font selection in the GUI.
 CREATE TABLE IF NOT EXISTS releases (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     album_id        INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
@@ -126,7 +130,9 @@ CREATE TABLE IF NOT EXISTS releases (
     catalog_number  TEXT,
     barcode         TEXT,
     mbid            TEXT,
-    status          TEXT
+    status          TEXT,
+    language        TEXT,
+    script          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_releases_album   ON releases(album_id);
 CREATE INDEX IF NOT EXISTS idx_releases_mbid    ON releases(mbid);
