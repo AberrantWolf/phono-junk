@@ -12,3 +12,5 @@ serde_json.workspace = true
 reqwest.workspace = true
 url.workspace = true
 log.workspace = true
+governor.workspace = true
+nonzero_ext.workspace = true

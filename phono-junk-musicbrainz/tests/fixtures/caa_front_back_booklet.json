@@ -1,0 +1,32 @@
+{
+  "images": [
+    {
+      "image": "https://coverartarchive.org/release/11111111-1111-1111-1111-111111111111/1000.jpg",
+      "front": true,
+      "back": false,
+      "types": ["Front"],
+      "approved": true
+    },
+    {
+      "image": "https://coverartarchive.org/release/11111111-1111-1111-1111-111111111111/2000.jpg",
+      "front": false,
+      "back": true,
+      "types": ["Back"],
+      "approved": true
+    },
+    {
+      "image": "https://coverartarchive.org/release/11111111-1111-1111-1111-111111111111/3000.jpg",
+      "front": true,
+      "back": false,
+      "types": ["Booklet", "Front"],
+      "approved": true
+    },
+    {
+      "image": "https://coverartarchive.org/release/11111111-1111-1111-1111-111111111111/4000.jpg",
+      "front": false,
+      "back": false,
+      "types": ["Booklet"],
+      "approved": true
+    }
+  ]
+}

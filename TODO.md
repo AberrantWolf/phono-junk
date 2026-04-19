@@ -10,39 +10,16 @@ Work queue for phono-junk, organized as an ordered sprint list. Each sprint is s
 - [x] **Sprint 2 — TOC extraction from CUE + CHD**
   Generic absolute-sector layout (`TrackLayout`, `TrackKind`, `LEAD_IN_FRAMES`, `compute_cue_layout`, `read_cue_layout`, `compute_chd_layout`, `read_chd_layout`) landed upstream in `junk-libs-disc` so retro-junk can reuse it. Audio-CD-specific CD-Extra -11,400 correction lives in `phono-junk-toc::toc_from_layout::layout_to_toc`. Integration test reproduces Sprint 1's ARver 3-track DiscIDs end-to-end from a real `.cue` + sparse `.bin`, and verifies CD-Extra handling against a synthetic mixed-session fixture. Fixture BINs are sparse (`File::set_len`) — 0 bytes on disk, ~750 MB logical.
 
+- [x] **Sprint 3 — Rate-limited HTTP + User-Agent foundation** (`phono-junk-identify/src/http.rs`)
+  Rate-limited `HttpClient` with per-host `governor` token buckets (MB/CAA 1/s, iTunes 20/min; Discogs quota parked until the provider un-defers). Mandatory User-Agent injection (MB requires it; builder returns `MissingUserAgent` if unset). Tests cover UA injection, UA-required, per-host rate limiting with `FakeRelativeClock`, independent per-host buckets, and HTTP 429 mapping. Credential persistence and Discogs deferred post-MVP.
+
+- [x] **Sprint 4 + 6 (bundled) — MusicBrainz + CAA + iTunes providers** (`phono-junk-musicbrainz/`, `phono-junk-itunes/`)
+  `MusicBrainzProvider::lookup` implements `/ws/2/discid/<id>?inc=artists+recordings+release-groups&fmt=json`; response → `ProviderResult` with album/release/track metadata and a shared `artist_credit::format` helper. `CoverArtArchiveProvider::lookup_art` implements `/release/<mbid>` JSON listing with six-way `AssetType` classification (booklet/tray/medium/obi beat back/front when tagged). `ITunesProvider::lookup_art` implements Search API with `100x100bb.jpg` → `1000x1000bb.jpg` rewrite. Trait change: `AssetProvider::lookup_art(&AssetLookupCtx)` replaces the three-parameter signature so iTunes can see album title + artist. `PhonoContext::with_default_providers(user_agent)` threads UA into every provider. Hand-rolled JSON fixtures under each crate's `tests/fixtures/` with source-citing README; `#[ignore]`-gated live-network smoke tests per crate. Amazon half split out — see deferred section.
+
+- [x] **Sprint 7 — AccurateRip CRC v1/v2 + PCM iterator** (`junk-libs-disc/src/pcm.rs`, `phono-junk-accuraterip/src/crc.rs`)
+  PCM iterator landed upstream in `junk-libs-disc`: `TrackPcmReader` with `from_bin` / `from_chd` constructors, yielding `Result<[u32; 588], AnalysisError>` per CDDA frame via a shared `sector_to_samples` helper. New `read_chd_raw_sector` primitive extracted so BIN and CHD audio reads share one hunk-decode path. CRC v1 and v2 computed in a single pass via `track_crc_streaming(samples, total_samples, TrackPosition)` with `TrackPosition::{First, Middle, Last, Only}` driving skip bounds. Cross-verified against ARver's `tests/checksums_test.py` fixture CRCs (sample.wav at four positions + silence.wav). Corrected an off-by-one in `.claude/skills/phono-archive/formats/AccurateRip.md` — the reference C implementations include position 2940 (using `multiplier >= skip_frames`), not 2941.
+
 ## Sprint queue (implement in order)
-
-### Sprint 3 — Rate-limited HTTP + User-Agent foundation
-Location: `phono-junk-identify/src/http.rs` (canonical), `phono-junk-lib/src/http.rs` (re-export)
-Depends on: nothing (shared by every network-hitting sprint after this)
-- [x] Rate-limited `HttpClient` with per-host `governor` token buckets (MB/CAA 1/s, iTunes 20/min; Discogs 60/min quota known but unused until the Discogs provider un-defers)
-- [x] Mandatory User-Agent injection (MB requires it; builder returns `MissingUserAgent` if unset)
-- [x] Tests: UA injection, UA required, per-host rate limiting with `FakeRelativeClock`, independent per-host buckets, HTTP 429 mapping
-
-Credential persistence and Discogs are **deferred post-MVP** (see deferred list below).
-
-### Sprint 4 — MusicBrainz provider + Cover Art Archive
-Location: `phono-junk-musicbrainz/`
-Depends on: Sprint 1, Sprint 3
-- [ ] `/ws/2/discid/<id>?inc=recordings+artists+release-groups&fmt=json` lookup
-- [ ] JSON response → `ProviderResult` / `AlbumIdentification`
-- [ ] Cover Art Archive `/release/<mbid>/front` asset fetch (`AssetProvider` impl)
-- [ ] Tests against recorded JSON fixtures (no live network in CI)
-
-### Sprint 6 — iTunes + Amazon asset providers
-Location: `phono-junk-itunes/`, `phono-junk-amazon/`
-Depends on: Sprint 3
-- [ ] iTunes Search API lookup + `100x100bb.jpg` → `1000x1000bb.jpg` URL rewrite
-- [ ] Amazon ASIN-direct image URL construction + fetch (mode 1 only; PA-API deferred)
-- [ ] Tests for URL rewrite logic + fixture-based search parsing
-
-### Sprint 7 — AccurateRip CRC v1/v2 + PCM iterator
-Location: `phono-junk-accuraterip/`, possibly upstream to `junk-libs-disc`
-Depends on: Sprint 2
-- [ ] Per-track raw PCM sample iterator (yields stereo u32 samples; 588/sector). If it fits in `junk-libs-disc`, add it there; otherwise keep local with a TODO to upstream.
-- [ ] CRC v1: sample-position-weighted sum, first-track 2940-sample skip, last-track intact
-- [ ] CRC v2: same weighting but 64-bit intermediate product folded back, last-track 2940-sample skip
-- [ ] Tests against known-good rip (raw PCM fixture → published AR CRC; ARver's test WAVs are a good source)
 
 ### Sprint 8 — AccurateRip dBAR fetch + parse
 Location: `phono-junk-accuraterip/`
@@ -114,6 +91,18 @@ Depends on: Sprint 14
 - [ ] **redumper `.toc` / MDS / MDF layout adapters** — add `junk_libs_disc::toc::read_toc_layout(path) -> Vec<TrackLayout>` (and similar for MDS/MDF) so alternative TOC sources plug into the same `TrackLayout` funnel. Zero phono-junk work when added; each is a separate sprint.
 - [ ] **ISRC extraction from CUE sheets** — `parse_cue` drops ISRC lines today; extend during Sprint 4 (MusicBrainz) when ISRC fallback matching becomes relevant. Stash in a per-track sidecar struct, not `Toc`.
 - [ ] **`libdiscid` FFI byte-for-byte cross-check harness** — CI-style belt-and-braces check that links `libdiscid` via FFI and asserts byte-equal output on every fixture. Sprint 1's string equality against libdiscid/ARver test values is already gold-standard; this is future hygiene.
+- [ ] **Multi-disc MB release handling (Sprint 4+6)** — `parse_discid_response` picks `media[0]` and logs when `>1`. Full medium-selection (match TOC track count against each medium, handle the multi-disc catalog model) deferred until a real multi-disc fixture surfaces.
+- [ ] **MB multi-release disambiguation UI (Sprint 4+6)** — when `releases.len() > 1` for a DiscID (legitimate case: region variants and re-issues), MVP picks the first and warns. User-facing picker is a manual-search-UI scope item (listed in the post-MVP deferred block).
+- [ ] **CAA multi-size thumbnail picker (Sprint 4+6)** — `parse_caa_response` returns the full-size `image` URL only; `thumbnails.small` / `thumbnails.large` / `thumbnails.1200` are ignored. Revisit alongside the GUI asset picker (Sprint 14+).
+- [ ] **CAA approved-only filtering (Sprint 4+6)** — the `approved` flag is dropped during parsing. MVP trusts all images since most CAA submissions are approved; add a filter/penalty once a disagreement surfaces.
+- [ ] **`AssetLookupCtx.album` → non-optional (Sprint 4+6)** — currently `Option<&AlbumMeta>` because Sprint 11 wiring isn't in place yet. Tighten to `&AlbumMeta` once the aggregator guarantees an album is resolved before art lookup fires.
+- [ ] **iTunes fuzzy-match scoring (Sprint 4+6)** — current impl labels every Search API hit `AssetConfidence::Fuzzy`. Post-MVP, score each hit against `album.title + album.artist_credit` (Levenshtein / token-sort ratio) and either drop mismatches or rank by score.
+- [ ] **iTunes URL rewrite via regex (Sprint 4+6)** — `replace("100x100bb.jpg", ...)` covers the canonical path; extend to `NxNbb\.(jpg|png)` regex once a non-100 source surfaces.
+- [ ] **MB per-track artist credit (Sprint 4+6)** — track-level artist credits (for compilations, split releases) live at `media[].tracks[].recording.artist-credit` in MB. `TrackMeta.artist_credit` stays `None` in MVP; wire up when a compilation fixture surfaces.
+- [ ] **Sample-offset compensation for AR lookup (Sprint 7)** — `track_crc_streaming` computes CRCs at drive offset 0. Real-world verification often requires trying ±offsets (typically −30 to +30 samples) to find a match. Defer to a mini-sprint between Sprint 8 (dBAR parse) and Sprint 11 — offset scan only makes sense once there's a target CRC to compare against. The `SA`/`SB` compensated-sum technique documented in `AccurateRip.md` "Implementation notes" is the path.
+- [ ] **Multi-FILE CUE PCM iteration (Sprint 7)** — `TrackPcmReader::from_bin` assumes the CUE sheet is backed by a single whole-disc BIN. CDRWin-style CUEs with one BIN per track need a `from_cue(cue_path, &TrackLayout)` constructor that consults FILE directives. Defer until a real multi-FILE CUE fixture surfaces.
+- [ ] **Real-CHD PCM integration test (Sprint 2/7)** — Sprint 2's deferred note promised a real CHD PCM round-trip alongside Sprint 7. The PCM iterator's CHD path has unit coverage but no real-CHD integration test; add one when a usable fixture is available.
+- [ ] **CHD hunk caching for PCM streaming (Sprint 7)** — `TrackPcmReader::from_chd` currently re-opens the CHD file and re-decompresses the target hunk per sector (inherited from existing `read_chd_sector` behaviour). For a 70-minute CD's ~316,000 audio sectors this is a major waste. Fix by caching the current hunk's bytes on the reader, or by holding a long-lived `chd::Chd` handle inside `PcmSource::Chd`. Not blocking MVP correctness; high-value speedup for Sprint 12's batch extract.
 
 ## Deferred (post-MVP)
 
@@ -121,6 +110,7 @@ Captured from the original bootstrap plan; not blocking v1 but known wants.
 
 - [ ] **CredentialStore TOML persistence + obfuscation** — deferred until the first token-requiring provider (Discogs or Amazon PA-API) moves back into scope. Previously Sprint 3 scope. Intended on-disk format: plain TOML for keys, base64-wrapped XOR for values, key embedded in the binary. Not crypto — matches retro-junk-scraper's "prevent casual leaks" goal, but applied to user tokens at rest (distinct from retro-junk-scraper's compile-time embedded dev credentials, which is a different use case and should not be conflated).
 - [ ] **Discogs provider + image asset** (was Sprint 5) — requires a user token, so moves here alongside credential persistence. Location: `phono-junk-discogs/`. Work: `/database/search?type=release&barcode=...` + `catno=...` lookup with user token; JSON → `ProviderResult` populating `barcode` / `catalog_number` in `DiscIds` enrichment; Discogs image URL asset fetch; tests against recorded JSON fixtures.
+- [ ] **Amazon asset provider** (was second half of Sprint 6) — split out of Sprint 4+6 and moved here. ASIN-direct fetch from `m.media-amazon.com/images/I/<asin>.jpg` can't fire without an ASIN, and the only ASIN sources in the pipeline are Discogs responses and user entry (both deferred). Reactivate alongside Discogs: add an `asin` slot to `DiscIds`, populate it from Discogs, then wire `AmazonProvider::lookup_art` to emit a candidate when `DiscIds.asin.is_some()`. PA-API search mode stays deferred indefinitely (needs affiliate credentials). Crate stub stays a workspace member; `PhonoContext::with_default_providers` re-registers it when the ASIN path exists.
 - [ ] **Manual search UI** for unidentified discs across all providers — visual cover-picker, romanization search, submit-as-new-release flow for MusicBrainz
 - [ ] **Barcode extraction** from redumper log and CD-Text to enable automatic Discogs (and other barcode-keyed) lookup without user intervention
 - [ ] **Additional identification providers** as the user researches endpoints: VGMdb (vgmdb.net, strong on anime/game OSTs), Tower Records Japan (if a usable API exists), Gracenote/CDDB, CDJapan

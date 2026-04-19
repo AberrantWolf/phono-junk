@@ -1,0 +1,11 @@
+{
+  "images": [
+    {
+      "image": "https://coverartarchive.org/release/11111111-1111-1111-1111-111111111111/1000.jpg",
+      "front": true,
+      "back": false,
+      "types": ["Front"],
+      "approved": true
+    }
+  ]
+}

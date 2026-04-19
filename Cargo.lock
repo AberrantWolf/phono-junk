@@ -3341,6 +3341,7 @@ dependencies = [
 name = "phono-junk-accuraterip"
 version = "0.1.0"
 dependencies = [
+ "junk-libs-core",
  "junk-libs-disc",
  "log",
  "phono-junk-core",
@@ -3461,7 +3462,9 @@ dependencies = [
 name = "phono-junk-itunes"
 version = "0.1.0"
 dependencies = [
+ "governor",
  "log",
+ "nonzero_ext",
  "phono-junk-core",
  "phono-junk-identify",
  "reqwest",
@@ -3479,11 +3482,9 @@ dependencies = [
  "junk-libs-disc",
  "log",
  "phono-junk-accuraterip",
- "phono-junk-amazon",
  "phono-junk-catalog",
  "phono-junk-core",
  "phono-junk-db",
- "phono-junk-discogs",
  "phono-junk-extract",
  "phono-junk-identify",
  "phono-junk-itunes",
@@ -3499,7 +3500,10 @@ dependencies = [
 name = "phono-junk-musicbrainz"
 version = "0.1.0"
 dependencies = [
+ "governor",
+ "httpmock",
  "log",
+ "nonzero_ext",
  "phono-junk-core",
  "phono-junk-identify",
  "reqwest",

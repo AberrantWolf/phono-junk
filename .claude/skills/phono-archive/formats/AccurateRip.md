@@ -57,7 +57,7 @@ The accumulator stays 32-bit with wrap-around; what changes is that the high hal
 
 CD audio has slightly different alignment near disc boundaries. Both CRC versions apply the same skip logic:
 
-- **First track of the disc:** skip the first **5 CDDA frames** (= `5 × 588 = 2940` stereo samples). Positions `1..=2940` do not contribute. The first included position is `2941`.
+- **First track of the disc:** skip the first **5 CDDA frames** (= `5 × 588 = 2940` stereo samples). Positions `1..=2939` do not contribute; position `2940` is the first included position (the reference C implementations use `multiplier >= skip_frames`, so `multiplier == 2940` passes the gate).
 - **Last track of the disc:** skip the last **5 CDDA frames** (= 2940 samples). The last included position is `(track_sample_count - 2940)`.
 - **All other tracks:** no skip. Every position `1..=track_sample_count` contributes.
 
@@ -65,10 +65,15 @@ Expressed as `check_start` / `check_end`:
 
 | Track position    | check_start | check_end                           |
 |-------------------|-------------|-------------------------------------|
-| First track       | `2941`      | `track_sample_count`                |
+| First track       | `2940`      | `track_sample_count`                |
 | Middle tracks     | `1`         | `track_sample_count`                |
 | Last track        | `1`         | `track_sample_count - 2940`         |
-| Single-track disc | `2941`      | `track_sample_count - 2940`         |
+| Single-track disc | `2940`      | `track_sample_count - 2940`         |
+
+These bounds match both reference implementations (leo-bogert's
+[`accuraterip-checksum.c`](https://github.com/leo-bogert/accuraterip-checksum/blob/master/accuraterip-checksum.c)
+and ARver's [`_audio.c`](https://github.com/arcctgx/ARver/blob/master/arver/audio/_audio.c))
+and are cross-verified via ARver's `tests/checksums_test.py` fixture CRCs.
 
 **Why the skip:** historical robustness — CD drives vary in how they handle the very first and very last samples of the disc's audio region, so AccurateRip ignores those zones to reduce false mismatches.
 

@@ -1,0 +1,36 @@
+{
+  "releases": [
+    {
+      "id": "33333333-3333-3333-3333-333333333333",
+      "title": "Shared DiscID Album (Original EU Pressing)",
+      "date": "1999",
+      "country": "GB",
+      "artist-credit": [{ "name": "Example Artist" }],
+      "label-info": [],
+      "media": [
+        {
+          "position": 1,
+          "tracks": [
+            { "position": 1, "title": "Only Track", "length": 300000 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "44444444-4444-4444-4444-444444444444",
+      "title": "Shared DiscID Album (US Reissue)",
+      "date": "2004",
+      "country": "US",
+      "artist-credit": [{ "name": "Example Artist" }],
+      "label-info": [],
+      "media": [
+        {
+          "position": 1,
+          "tracks": [
+            { "position": 1, "title": "Only Track", "length": 300000 }
+          ]
+        }
+      ]
+    }
+  ]
+}

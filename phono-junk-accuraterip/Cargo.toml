@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 phono-junk-core.workspace = true
+junk-libs-core.workspace = true
 junk-libs-disc.workspace = true
 reqwest.workspace = true
 log.workspace = true

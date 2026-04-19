@@ -1,0 +1,17 @@
+{
+  "resultCount": 1,
+  "results": [
+    {
+      "wrapperType": "collection",
+      "collectionType": "Album",
+      "artistId": 123456789,
+      "collectionId": 987654321,
+      "artistName": "Example Artist",
+      "collectionName": "Example Album",
+      "artworkUrl60": "https://is1-ssl.mzstatic.com/image/thumb/Music/v4/00/example/source/60x60bb.jpg",
+      "artworkUrl100": "https://is1-ssl.mzstatic.com/image/thumb/Music/v4/00/example/source/100x100bb.jpg",
+      "releaseDate": "2001-03-26T08:00:00Z",
+      "country": "USA"
+    }
+  ]
+}

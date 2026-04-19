@@ -9,8 +9,8 @@
 
 use phono_junk_core::{DiscIds, Toc};
 use phono_junk_identify::{
-    AssetCandidate, AssetProvider, AssetType, Credentials, DiscIdKind, IdentificationProvider,
-    ProviderError, ProviderResult, ReleaseMeta,
+    AssetCandidate, AssetLookupCtx, AssetProvider, AssetType, Credentials, DiscIdKind,
+    IdentificationProvider, ProviderError, ProviderResult,
 };
 
 pub struct DiscogsProvider;
@@ -62,11 +62,10 @@ impl AssetProvider for DiscogsProvider {
 
     fn lookup_art(
         &self,
-        _release: &ReleaseMeta,
-        _ids: &DiscIds,
-        _creds: &Credentials,
+        _ctx: &AssetLookupCtx<'_>,
     ) -> Result<Vec<AssetCandidate>, ProviderError> {
-        // TODO: release images come from the Discogs /releases/<id> response
+        // Deferred post-MVP: requires user token + credential persistence.
+        // See TODO.md.
         Ok(Vec::new())
     }
 }

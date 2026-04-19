@@ -11,9 +11,8 @@
 //! The MVP lands mode 1; mode 2 is wired but returns an empty result until
 //! credentials are supplied.
 
-use phono_junk_core::DiscIds;
 use phono_junk_identify::{
-    AssetCandidate, AssetProvider, AssetType, Credentials, ProviderError, ReleaseMeta,
+    AssetCandidate, AssetLookupCtx, AssetProvider, AssetType, ProviderError,
 };
 
 pub struct AmazonProvider;
@@ -41,11 +40,10 @@ impl AssetProvider for AmazonProvider {
 
     fn lookup_art(
         &self,
-        _release: &ReleaseMeta,
-        _ids: &DiscIds,
-        _creds: &Credentials,
+        _ctx: &AssetLookupCtx<'_>,
     ) -> Result<Vec<AssetCandidate>, ProviderError> {
-        // TODO: ASIN-direct fetch from m.media-amazon.com; PA-API search if creds present.
+        // Deferred post-MVP: ASIN source (Discogs / user entry) isn't wired yet.
+        // See TODO.md ("Amazon provider impl").
         Ok(Vec::new())
     }
 }

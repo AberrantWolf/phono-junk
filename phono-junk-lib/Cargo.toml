@@ -9,9 +9,10 @@ phono-junk-core.workspace = true
 phono-junk-toc.workspace = true
 phono-junk-identify.workspace = true
 phono-junk-musicbrainz.workspace = true
-phono-junk-discogs.workspace = true
 phono-junk-itunes.workspace = true
-phono-junk-amazon.workspace = true
+# phono-junk-discogs + phono-junk-amazon are deferred post-MVP (see TODO.md).
+# They're still workspace members so they keep compiling as stubs; just not
+# wired into PhonoContext yet.
 phono-junk-accuraterip.workspace = true
 phono-junk-catalog.workspace = true
 phono-junk-db.workspace = true

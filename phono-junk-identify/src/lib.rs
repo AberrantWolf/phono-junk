@@ -167,6 +167,21 @@ pub trait IdentificationProvider: Send + Sync {
     ) -> Result<Option<ProviderResult>, ProviderError>;
 }
 
+/// Context passed to [`AssetProvider::lookup_art`].
+///
+/// Bundled into a struct so future fields (language/country preference,
+/// user hints, etc.) are additive rather than trait-breaking. `album` is
+/// optional today because the aggregator (Sprint 11) isn't wired yet to
+/// guarantee an album is resolved before art lookup; tighten to `&AlbumMeta`
+/// once that path exists.
+#[derive(Debug, Clone, Copy)]
+pub struct AssetLookupCtx<'a> {
+    pub album: Option<&'a AlbumMeta>,
+    pub release: &'a ReleaseMeta,
+    pub ids: &'a DiscIds,
+    pub creds: &'a Credentials,
+}
+
 /// Asset provider trait — album art sources.
 pub trait AssetProvider: Send + Sync {
     fn name(&self) -> &'static str;
@@ -175,12 +190,8 @@ pub trait AssetProvider: Send + Sync {
     fn asset_types(&self) -> &[AssetType];
 
     /// Enumerate candidate assets for a release. Caller decides which to pick.
-    fn lookup_art(
-        &self,
-        release: &ReleaseMeta,
-        ids: &DiscIds,
-        creds: &Credentials,
-    ) -> Result<Vec<AssetCandidate>, ProviderError>;
+    fn lookup_art(&self, ctx: &AssetLookupCtx<'_>)
+    -> Result<Vec<AssetCandidate>, ProviderError>;
 }
 
 /// Aggregator: fans out to registered providers and merges results.
