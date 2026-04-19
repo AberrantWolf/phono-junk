@@ -28,9 +28,11 @@ thiserror.workspace = true
 governor.workspace = true
 nonzero_ext.workspace = true
 rusqlite.workspace = true
+walkdir.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 url.workspace = true
-tempfile = "3"
+tempfile.workspace = true
 claxon = "0.4"
 metaflac = "0.2"

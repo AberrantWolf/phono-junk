@@ -68,6 +68,10 @@ eframe = "0.30"
 egui = "0.30"
 egui_extras = { version = "0.30", features = ["image"] }
 rfd = "0.15"
+walkdir = "2"
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
 
 [profile.dist]
 inherits = "release"

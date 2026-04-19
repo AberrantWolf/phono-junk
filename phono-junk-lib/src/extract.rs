@@ -26,7 +26,7 @@ use rusqlite::Connection;
 use crate::PhonoContext;
 
 /// Output summary — every file that was written to disk.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ExportedDisc {
     pub disc_id: Id,
     pub written: Vec<PathBuf>,

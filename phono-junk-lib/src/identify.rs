@@ -50,7 +50,7 @@ use crate::PhonoContext;
 /// Outcome of [`PhonoContext::identify_disc`]. IDs point at the persisted
 /// catalog rows; counts / flags are convenience stats for callers that
 /// want to log or branch on the result.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct IdentifiedDisc {
     pub disc_id: Option<Id>,
     pub album_id: Option<Id>,

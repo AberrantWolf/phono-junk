@@ -32,6 +32,33 @@ cargo run -p phono-junk-cli -- --help
 
 On first build, Cargo fetches [junk-libs](https://github.com/AberrantWolf/junk-libs) over git. For faster iteration when you're also developing junk-libs, clone both repos side-by-side and uncomment the `[patch]` section at the bottom of the root `Cargo.toml`.
 
+## CLI usage
+
+```bash
+# Scan a directory tree for rips and identify each against every provider.
+phono-junk scan ~/rips
+
+# Identify a single disc from its CUE/CHD.
+phono-junk identify ~/rips/pinkerton.cue
+
+# Verify a rip against AccurateRip. Accepts --disc-id or a path.
+phono-junk verify --disc-id 17
+
+# Export disc(s) as FLAC.
+phono-junk export --disc-ids 17,18 --out ~/Music/library
+
+# Filter the catalog.
+phono-junk list --artist weezer --year 1990-1999
+phono-junk --format json list --country JP
+```
+
+Global flags (valid on every subcommand):
+
+- `--db <path>` — library database path. Default: `$PHONO_JUNK_DB`, else XDG `data_dir()/phono-junk/library.db`.
+- `--user-agent <string>` — HTTP User-Agent for provider calls. Default identifies phono-junk and links to the repo. MusicBrainz *requires* a descriptive UA with contact info; override it with your own contact if you plan to run scans at volume.
+- `--format <human|json>` — output shape.
+- `-v` / `-vv` — log verbosity (INFO / DEBUG). Default is WARN.
+
 ## Architecture
 
 See [CLAUDE.md](CLAUDE.md) for the full workspace architecture, dependency graph, crate responsibilities, and development conventions.
