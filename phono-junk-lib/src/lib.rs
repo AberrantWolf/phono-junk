@@ -9,6 +9,10 @@
 
 pub mod context;
 pub mod credentials;
+pub mod extract;
 pub mod http;
+pub mod identify;
 
 pub use context::PhonoContext;
+pub use extract::{ExportError, ExportedDisc};
+pub use identify::{IdentifiedDisc, IdentifyError};

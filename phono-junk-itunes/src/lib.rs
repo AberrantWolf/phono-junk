@@ -37,8 +37,9 @@ impl ITunesProvider {
         Ok(Self { http })
     }
 
-    #[doc(hidden)]
-    pub fn with_http_client(http: HttpClient) -> Self {
+    /// Inject a preconfigured client, sharing rate-limit state across
+    /// providers (see `PhonoContext::with_default_providers`).
+    pub fn with_client(http: HttpClient) -> Self {
         Self { http }
     }
 }
@@ -53,13 +54,13 @@ impl AssetProvider for ITunesProvider {
     }
 
     fn lookup_art(&self, ctx: &AssetLookupCtx<'_>) -> Result<Vec<AssetCandidate>, ProviderError> {
-        // Text search needs album title + artist. The aggregator will usually
-        // have populated these from an earlier MB hit; without both, skip.
-        let Some(album) = ctx.album else {
-            return Ok(Vec::new());
-        };
-        let (Some(title), Some(artist)) = (album.title.as_deref(), album.artist_credit.as_deref())
-        else {
+        // Text search needs album title + artist. The aggregator guarantees
+        // an AlbumMeta; the individual fields may still be None if no
+        // provider populated them, in which case iTunes can't search.
+        let (Some(title), Some(artist)) = (
+            ctx.album.title.as_deref(),
+            ctx.album.artist_credit.as_deref(),
+        ) else {
             return Ok(Vec::new());
         };
 

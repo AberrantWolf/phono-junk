@@ -43,14 +43,15 @@ fn invalid_json_maps_to_parse_error() {
 }
 
 #[test]
-fn provider_without_album_title_skips_lookup() {
+fn provider_without_album_fields_skips_lookup() {
     let provider =
         ITunesProvider::new("phono-junk-tests/0.1 (+tests@example.invalid)").expect("construct");
     let ids = DiscIds::default();
     let creds = Credentials::new();
     let release = ReleaseMeta::default();
+    let album = AlbumMeta::default();
     let ctx = AssetLookupCtx {
-        album: None,
+        album: &album,
         release: &release,
         ids: &ids,
         creds: &creds,
@@ -72,7 +73,7 @@ fn provider_without_artist_or_title_skips_lookup() {
         ..Default::default()
     };
     let ctx = AssetLookupCtx {
-        album: Some(&album_no_title),
+        album: &album_no_title,
         release: &release,
         ids: &ids,
         creds: &creds,
@@ -96,7 +97,7 @@ fn live_lookup_against_itunes() {
         ..Default::default()
     };
     let ctx = AssetLookupCtx {
-        album: Some(&album),
+        album: &album,
         release: &release,
         ids: &ids,
         creds: &creds,

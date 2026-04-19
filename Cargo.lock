@@ -945,6 +945,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmake"
+version = "0.1.58"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "codespan-reporting"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1554,6 +1563,15 @@ name = "fixedbitset"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
+
+[[package]]
+name = "flac-bound"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e907092e9fba0d718cad77433321f524836e90a2c4cc7ab67e8fb5244047ad2"
+dependencies = [
+ "libflac-sys",
+]
 
 [[package]]
 name = "flate2"
@@ -2572,6 +2590,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52ff2c0fe9bc6cb6b14a0592c2ff4fa9ceb83eea9db979b0487cd054946a2b8f"
 
 [[package]]
+name = "libflac-sys"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fc5cbb957a914952ee9b8667e82b984c6dc280087df01497fc5b4776d303582"
+dependencies = [
+ "cmake",
+ "libc",
+]
+
+[[package]]
 name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2709,6 +2737,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "metaflac"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdf25a3451319c52a4a56d956475fbbb763bfb8420e2187d802485cb0fd8d965"
+dependencies = [
+ "byteorder",
+ "hex",
 ]
 
 [[package]]
@@ -3405,6 +3443,8 @@ dependencies = [
  "phono-junk-catalog",
  "phono-junk-core",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.18",
 ]
@@ -3426,10 +3466,15 @@ dependencies = [
 name = "phono-junk-extract"
 version = "0.1.0"
 dependencies = [
+ "claxon",
+ "flac-bound",
+ "junk-libs-core",
  "junk-libs-disc",
  "log",
+ "metaflac",
  "phono-junk-catalog",
  "phono-junk-core",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 
@@ -3483,10 +3528,14 @@ dependencies = [
 name = "phono-junk-lib"
 version = "0.1.0"
 dependencies = [
+ "claxon",
  "dirs",
+ "governor",
  "junk-libs-core",
  "junk-libs-disc",
  "log",
+ "metaflac",
+ "nonzero_ext",
  "phono-junk-accuraterip",
  "phono-junk-catalog",
  "phono-junk-core",
@@ -3496,10 +3545,13 @@ dependencies = [
  "phono-junk-itunes",
  "phono-junk-musicbrainz",
  "phono-junk-toc",
+ "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "toml",
+ "url",
 ]
 
 [[package]]

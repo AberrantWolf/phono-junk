@@ -92,6 +92,15 @@ impl HostBucket for FakeBucket {
 }
 
 /// Rate-limited blocking HTTP client. Construct via [`HttpClient::builder`].
+///
+/// `Clone` is shallow — every field is already cheap to share (`reqwest`'s
+/// blocking client is internally `Arc`, the per-host buckets are
+/// `Arc<dyn HostBucket>`, and `sleep_fn` is an `Arc`). Cloning a client
+/// therefore produces an alias that shares rate-limit state: two providers
+/// handed clones of the same client compete for the same token buckets.
+/// This is exactly what [`crate::Aggregator`]'s parallel fan-out needs to
+/// avoid double-spending MusicBrainz's 1 req/sec quota across MB + CAA.
+#[derive(Clone)]
 pub struct HttpClient {
     http: reqwest::blocking::Client,
     user_agent: String,

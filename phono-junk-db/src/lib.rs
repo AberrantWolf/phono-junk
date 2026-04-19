@@ -6,6 +6,9 @@
 
 use thiserror::Error;
 
+pub mod cache;
+pub mod crud;
+pub mod overrides;
 pub mod schema;
 
 pub use schema::{CURRENT_VERSION, SchemaError, create_schema, open_database, open_memory};

@@ -44,10 +44,11 @@ impl MusicBrainzProvider {
         Ok(Self { http })
     }
 
-    /// Inject a preconfigured client. Used by tests to point the provider at
-    /// an httpmock server.
-    #[doc(hidden)]
-    pub fn with_http_client(http: HttpClient) -> Self {
+    /// Inject a preconfigured client. This is the canonical constructor
+    /// when the caller wants to share one rate-limited [`HttpClient`] across
+    /// multiple providers (see `PhonoContext::with_default_providers`).
+    /// Tests also use it to point the provider at an httpmock server.
+    pub fn with_client(http: HttpClient) -> Self {
         Self { http }
     }
 }
@@ -197,8 +198,9 @@ impl CoverArtArchiveProvider {
         Ok(Self { http })
     }
 
-    #[doc(hidden)]
-    pub fn with_http_client(http: HttpClient) -> Self {
+    /// Inject a preconfigured client, sharing rate-limit state across
+    /// providers. See [`MusicBrainzProvider::with_client`].
+    pub fn with_client(http: HttpClient) -> Self {
         Self { http }
     }
 }

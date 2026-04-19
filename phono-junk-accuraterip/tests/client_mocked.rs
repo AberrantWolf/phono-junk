@@ -16,7 +16,7 @@ fn client() -> AccurateRipClient {
         .user_agent("phono-junk-test/0.1")
         .build()
         .unwrap();
-    AccurateRipClient::with_http_client(http)
+    AccurateRipClient::with_client(http)
 }
 
 /// Smallest valid dBAR: 1 response, 1 track entry.

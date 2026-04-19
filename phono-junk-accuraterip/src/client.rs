@@ -33,10 +33,11 @@ impl AccurateRipClient {
         Ok(Self { http })
     }
 
-    /// Inject a preconfigured client. Used by tests to point the fetcher
-    /// at an httpmock server without touching the real internet.
-    #[doc(hidden)]
-    pub fn with_http_client(http: HttpClient) -> Self {
+    /// Inject a preconfigured client, sharing rate-limit state across
+    /// providers (see `PhonoContext::with_default_providers`). Also used
+    /// by tests to point the fetcher at an httpmock server without touching
+    /// the real internet.
+    pub fn with_client(http: HttpClient) -> Self {
         Self { http }
     }
 

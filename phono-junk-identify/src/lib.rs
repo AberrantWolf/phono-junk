@@ -10,8 +10,12 @@
 //! crates can't depend on `phono-junk-lib` (cycle) but all already depend on
 //! this crate.
 
+pub mod consensus;
+pub mod fanout;
 pub mod http;
 
+pub use consensus::{DisagreementEntity, MergedDisc, RawDisagreement, merge};
+pub use fanout::{identify_parallel, lookup_assets_parallel, spawn_all};
 pub use http::{HttpClient, HttpClientBuilder, HttpError, HttpResponse};
 
 use phono_junk_core::{AudioError, DiscIds, Toc};
@@ -170,13 +174,13 @@ pub trait IdentificationProvider: Send + Sync {
 /// Context passed to [`AssetProvider::lookup_art`].
 ///
 /// Bundled into a struct so future fields (language/country preference,
-/// user hints, etc.) are additive rather than trait-breaking. `album` is
-/// optional today because the aggregator (Sprint 11) isn't wired yet to
-/// guarantee an album is resolved before art lookup; tighten to `&AlbumMeta`
-/// once that path exists.
+/// user hints, etc.) are additive rather than trait-breaking. The
+/// aggregator guarantees an `AlbumMeta` is resolved by consensus before
+/// asset fan-out fires, so `album` is borrowed directly rather than
+/// `Option<&_>`.
 #[derive(Debug, Clone, Copy)]
 pub struct AssetLookupCtx<'a> {
-    pub album: Option<&'a AlbumMeta>,
+    pub album: &'a AlbumMeta,
     pub release: &'a ReleaseMeta,
     pub ids: &'a DiscIds,
     pub creds: &'a Credentials,
@@ -197,6 +201,26 @@ pub trait AssetProvider: Send + Sync {
 pub struct Aggregator {
     identifiers: Vec<Box<dyn IdentificationProvider>>,
     assets: Vec<Box<dyn AssetProvider>>,
+}
+
+/// Output of [`Aggregator::identify`]. Pure value — no DB side effects.
+/// Persistence (writing `Album` / `Release` / `Disc` / `Track` /
+/// `Disagreement` rows) is orchestrated by `phono-junk-lib::identify`.
+pub struct IdentifyOutcome {
+    pub merged: MergedDisc,
+    /// Provider errors that did not short-circuit the batch.
+    pub errors: Vec<(String, ProviderError)>,
+    /// `true` iff at least one provider returned `Ok(Some(...))`.
+    pub any_match: bool,
+}
+
+/// Output of [`Aggregator::lookup_assets`]. Candidates are deduplicated
+/// across providers by `(asset_type, source_url)` — CAA and iTunes both
+/// offer front covers, and double-inserting the same URL twice would
+/// dirty the catalog.
+pub struct AssetOutcome {
+    pub candidates: Vec<AssetCandidate>,
+    pub errors: Vec<(String, ProviderError)>,
 }
 
 impl Aggregator {
@@ -221,6 +245,62 @@ impl Aggregator {
 
     pub fn asset_providers(&self) -> &[Box<dyn AssetProvider>] {
         &self.assets
+    }
+
+    /// Fan out to every registered [`IdentificationProvider`] that can
+    /// answer with the ids available, merge the matches via
+    /// [`consensus::merge`], and return the outcome. Provider errors are
+    /// collected in `errors` and never short-circuit the batch.
+    pub fn identify(&self, toc: &Toc, ids: &DiscIds, creds: &Credentials) -> IdentifyOutcome {
+        let raw = fanout::identify_parallel(&self.identifiers, toc, ids, creds);
+
+        let mut matches: Vec<ProviderResult> = Vec::new();
+        let mut errors: Vec<(String, ProviderError)> = Vec::new();
+        for (name, result) in raw {
+            match result {
+                Ok(Some(r)) => matches.push(r),
+                Ok(None) => {}
+                Err(e) => errors.push((name, e)),
+            }
+        }
+
+        let any_match = !matches.is_empty();
+        let merged = if any_match {
+            consensus::merge(&matches)
+        } else {
+            MergedDisc::default()
+        };
+
+        IdentifyOutcome {
+            merged,
+            errors,
+            any_match,
+        }
+    }
+
+    /// Fan out to every registered [`AssetProvider`], collect candidates
+    /// in priority order, and deduplicate by `(asset_type, source_url)`
+    /// so CAA and iTunes can't both insert the same front-cover URL.
+    pub fn lookup_assets(&self, ctx: &AssetLookupCtx<'_>) -> AssetOutcome {
+        let raw = fanout::lookup_assets_parallel(&self.assets, ctx);
+        let mut candidates: Vec<AssetCandidate> = Vec::new();
+        let mut seen: std::collections::HashSet<(AssetType, String)> =
+            std::collections::HashSet::new();
+        let mut errors: Vec<(String, ProviderError)> = Vec::new();
+        for (name, result) in raw {
+            match result {
+                Ok(batch) => {
+                    for c in batch {
+                        let key = (c.asset_type, c.source_url.as_str().to_string());
+                        if seen.insert(key) {
+                            candidates.push(c);
+                        }
+                    }
+                }
+                Err(e) => errors.push((name, e)),
+            }
+        }
+        AssetOutcome { candidates, errors }
     }
 }
 
