@@ -3405,6 +3405,7 @@ dependencies = [
  "phono-junk-catalog",
  "phono-junk-core",
  "rusqlite",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 
