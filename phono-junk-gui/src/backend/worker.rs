@@ -1,28 +1,41 @@
 //! Standard boilerplate for spawning cancellable background operations.
 //!
-//! Mirrors `retro-junk-gui/src/backend/worker.rs`: allocates an [`OperationId`],
-//! creates an `Arc<AtomicBool>` cancellation token, clones the channel sender,
-//! and spawns a thread that receives `(op_id, cancel, tx)`.
+//! Mirrors `retro-junk-gui/src/backend/worker.rs`: allocates an
+//! [`OperationId`], creates an `Arc<AtomicBool>` cancellation token,
+//! registers the operation on [`PhonoApp::operations`], clones the
+//! channel sender, and spawns a thread that receives
+//! `(op_id, cancel, tx)`.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc;
 use std::thread;
 
-use crate::state::{AppMessage, OperationId};
+use crate::app::PhonoApp;
+use crate::state::{AppMessage, BackgroundOperation, OperationId, next_operation_id};
 
-static NEXT_OP_ID: AtomicU64 = AtomicU64::new(1);
-
-pub fn next_operation_id() -> OperationId {
-    NEXT_OP_ID.fetch_add(1, Ordering::Relaxed)
-}
-
-pub fn spawn_background_op<F>(tx: mpsc::Sender<AppMessage>, f: F) -> (OperationId, Arc<AtomicBool>)
+/// Spawn a background operation and register it on the app's activity
+/// bar. Returns the allocated [`OperationId`] so callers can correlate
+/// later messages.
+///
+/// The closure receives `(op_id, cancel_token, tx)`. It owns `tx` and is
+/// expected to send at least an [`AppMessage::OperationComplete`] (or
+/// [`AppMessage::OperationFailed`]) before dropping it, so the main
+/// thread can retire the activity-bar entry.
+pub fn spawn_background_op<F>(app: &mut PhonoApp, description: String, work: F) -> OperationId
 where
     F: FnOnce(OperationId, Arc<AtomicBool>, mpsc::Sender<AppMessage>) + Send + 'static,
 {
     let op_id = next_operation_id();
     let cancel = Arc::new(AtomicBool::new(false));
-    let cancel_clone = Arc::clone(&cancel);
-    thread::spawn(move || f(op_id, cancel_clone, tx));
-    (op_id, cancel)
+    let tx = app.message_tx.clone();
+
+    app.operations
+        .push(BackgroundOperation::new(op_id, description, Arc::clone(&cancel)));
+
+    thread::spawn(move || {
+        work(op_id, cancel, tx);
+    });
+
+    op_id
 }

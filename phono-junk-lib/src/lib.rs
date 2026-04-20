@@ -9,6 +9,7 @@
 
 pub mod context;
 pub mod credentials;
+pub mod env;
 pub mod extract;
 pub mod http;
 pub mod identify;
@@ -19,6 +20,9 @@ pub mod verify;
 pub use context::PhonoContext;
 pub use extract::{ExportError, ExportedDisc};
 pub use identify::{IdentifiedDisc, IdentifyError};
-pub use list::{ListFilters, ListRow, YearSpec, filter_rows, load_list_rows};
+pub use list::{
+    ListEntry, ListFilters, ListRow, UnidentifiedRow, YearSpec, filter_entries, filter_rows,
+    load_list_entries, load_list_rows,
+};
 pub use scan::{IngestOutcome, ScanError, ScanEvent, ScanKind, ScanOpts, ScanSummary, ingest_path};
 pub use verify::{VerifiedTrack, VerifyError, VerifySummary, VerifyTarget};

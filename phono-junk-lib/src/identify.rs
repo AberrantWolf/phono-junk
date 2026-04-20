@@ -103,12 +103,27 @@ impl PhonoContext {
 
         // Step 2+3: fan-out + merge.
         let creds = self.credentials.to_credentials();
+        log::info!(
+            "identify: dispatching to providers — mb_discid={:?} cddb_id={:?} ar1={:?}",
+            ids.mb_discid,
+            ids.cddb_id,
+            ids.ar_discid1,
+        );
         let outcome: IdentifyOutcome = self.aggregator.identify(toc, ids, &creds);
         let provider_errors: Vec<(String, String)> = outcome
             .errors
             .iter()
             .map(|(name, e)| (name.clone(), e.to_string()))
             .collect();
+        for (name, err) in &provider_errors {
+            log::warn!("identify: provider {name} returned error: {err}");
+        }
+        log::info!(
+            "identify: fan-out complete — any_match={} sources={:?} errors={}",
+            outcome.any_match,
+            outcome.merged.sources,
+            provider_errors.len(),
+        );
 
         if !outcome.any_match {
             // Step 4: unidentified. Preserve TOC on the rip file; no

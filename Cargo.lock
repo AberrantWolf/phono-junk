@@ -3468,7 +3468,6 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "clap",
- "dirs",
  "env_logger",
  "httpmock",
  "log",

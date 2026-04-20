@@ -135,16 +135,26 @@ impl HttpClient {
             }
         }
 
+        log::debug!("HTTP GET {url_str}");
         let resp = self
             .http
             .get(url_str)
             .header(reqwest::header::USER_AGENT, &self.user_agent)
             .send()
-            .map_err(map_reqwest_err)?;
+            .map_err(|e| {
+                let err = map_reqwest_err(e);
+                log::warn!("HTTP GET {url_str} failed: {err}");
+                err
+            })?;
 
         let status = resp.status();
+        log::debug!("HTTP GET {url_str} → {}", status.as_u16());
         if status.as_u16() == 429 {
+            log::warn!("HTTP 429 rate-limited by {host} ({url_str})");
             return Err(HttpError::ServerRateLimited);
+        }
+        if !status.is_success() && status.as_u16() != 404 {
+            log::warn!("HTTP {} from {url_str}", status.as_u16());
         }
 
         let content_type = resp

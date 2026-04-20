@@ -10,7 +10,8 @@ use phono_junk_catalog::Id;
 use phono_junk_db::crud;
 use phono_junk_lib::{
     ExportedDisc, IngestOutcome, ListFilters, ListRow, PhonoContext, ScanEvent, ScanOpts,
-    ScanSummary, VerifySummary, VerifyTarget, YearSpec, filter_rows, ingest_path, load_list_rows,
+    ScanSummary, UnidentifiedRow, VerifySummary, VerifyTarget, YearSpec, filter_rows,
+    ingest_path, load_list_rows,
 };
 
 use crate::env::{CliEnv, OutputFormat, open_env};
@@ -566,13 +567,6 @@ enum ListOutput {
     Unidentified(Vec<UnidentifiedRow>),
 }
 
-#[derive(serde::Serialize)]
-struct UnidentifiedRow {
-    rip_file_id: Id,
-    cue_path: Option<String>,
-    chd_path: Option<String>,
-}
-
 fn run_list(
     cli: &Cli,
     fmt: OutputFormat,
@@ -589,8 +583,8 @@ fn run_list(
             .into_iter()
             .map(|r| UnidentifiedRow {
                 rip_file_id: r.id,
-                cue_path: r.cue_path.map(|p| p.display().to_string()),
-                chd_path: r.chd_path.map(|p| p.display().to_string()),
+                cue_path: r.cue_path,
+                chd_path: r.chd_path,
             })
             .collect();
         ListOutput::Unidentified(rows)
@@ -604,6 +598,7 @@ fn run_list(
             year: year_spec,
             country: country.map(String::from),
             label: label.map(String::from),
+            ..Default::default()
         };
         let rows = load_list_rows(&conn)?;
         ListOutput::Albums(filter_rows(rows, &filters))
@@ -644,10 +639,9 @@ fn format_list_output(o: &ListOutput) -> String {
             let mut lines = vec![format!("{:>4} path", "id")];
             for r in rows {
                 let path = r
-                    .cue_path
-                    .as_deref()
-                    .or(r.chd_path.as_deref())
-                    .unwrap_or("(no path)");
+                    .display_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "(no path)".into());
                 lines.push(format!("{:>4} {path}", r.rip_file_id));
             }
             lines.join("\n")

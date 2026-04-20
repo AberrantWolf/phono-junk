@@ -33,31 +33,19 @@ pub struct CliEnv {
 }
 
 /// Resolve the DB path from the CLI flag, the `PHONO_JUNK_DB` env var,
-/// or the XDG default (creating the parent dir if needed).
+/// or the shared XDG default.
 pub fn resolve_db_path(flag: Option<&Path>) -> Result<PathBuf, CliError> {
     if let Some(p) = flag {
         return Ok(p.to_path_buf());
     }
-    if let Ok(env) = std::env::var("PHONO_JUNK_DB") {
-        return Ok(PathBuf::from(env));
-    }
-    let base = dirs::data_dir().ok_or(CliError::NoDbPath)?;
-    Ok(base.join("phono-junk").join("library.db"))
+    phono_junk_lib::env::default_db_path().ok_or(CliError::NoDbPath)
 }
 
 pub fn resolve_user_agent(flag: Option<&str>) -> String {
     if let Some(ua) = flag {
         return ua.to_string();
     }
-    if let Ok(ua) = std::env::var("PHONO_JUNK_USER_AGENT") {
-        return ua;
-    }
-    concat!(
-        "phono-junk/",
-        env!("CARGO_PKG_VERSION"),
-        " ( https://github.com/AberrantWolf/phono-junk )"
-    )
-    .to_string()
+    phono_junk_lib::env::default_user_agent()
 }
 
 /// Build a full environment: ensure parent dir exists, open DB, register providers.

@@ -15,5 +15,6 @@ pub mod backend;
 pub mod fonts;
 pub mod state;
 pub mod views;
+pub mod widgets;
 
 pub use app::PhonoApp;
