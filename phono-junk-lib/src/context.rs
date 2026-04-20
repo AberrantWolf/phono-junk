@@ -96,8 +96,13 @@ impl PhonoContext {
         ctx.accuraterip = Some(AccurateRipClient::with_client(http.clone()));
         ctx.http = Some(http);
 
-        if let Err(e) = ctx.credentials.load_from_keyring() {
-            log::warn!("credentials: {e}");
+        // `PHONO_SKIP_KEYRING=1` suppresses the keyring read — set by the
+        // CLI smoke-test harness so `cargo test` doesn't provoke the
+        // macOS keychain consent prompt on every run.
+        if std::env::var_os("PHONO_SKIP_KEYRING").is_none() {
+            if let Err(e) = ctx.credentials.load_from_keyring() {
+                log::warn!("credentials: {e}");
+            }
         }
 
         Ok(ctx)

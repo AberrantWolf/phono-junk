@@ -38,7 +38,7 @@
 
 use std::path::Path;
 
-use egui::{Color32, RichText, Ui};
+use egui::{Color32, Label, RichText, Ui};
 use egui_extras::{Column, TableBuilder};
 use phono_junk_catalog::{Asset, Disagreement, IdentifyAttemptError, RipperProvenance, Track};
 use phono_junk_lib::{AlbumDetail, DiscDetail, ReleaseDetail, UnidentifiedDetail, audit};
@@ -47,6 +47,7 @@ use crate::app::PhonoApp;
 use crate::backend;
 use crate::fonts;
 use crate::state::{DetailCache, DetailPayload, EntryKey};
+use crate::widgets::table_header;
 
 pub fn show(ui: &mut Ui, app: &mut PhonoApp) {
     let Some(focus) = app.focused_entry else {
@@ -353,12 +354,12 @@ fn track_table(ui: &mut Ui, tracks: &[Track]) {
         } else {
             Column::exact(0.0)
         })
-        .header(18.0, |mut header| {
-            header.col(|ui| { ui.label("#"); });
-            header.col(|ui| { ui.label("Title"); });
-            header.col(|ui| { ui.label("Length"); });
+        .header(24.0, |mut header| {
+            header.col(|ui| table_header::static_header(ui, "#"));
+            header.col(|ui| table_header::static_header(ui, "Title"));
+            header.col(|ui| table_header::static_header(ui, "Length"));
             if any_artist {
-                header.col(|ui| { ui.label("Artist"); });
+                header.col(|ui| table_header::static_header(ui, "Artist"));
             } else {
                 header.col(|_ui| {});
             }
@@ -367,17 +368,20 @@ fn track_table(ui: &mut Ui, tracks: &[Track]) {
             for track in tracks {
                 body.row(16.0, |mut tr| {
                     tr.col(|ui| {
-                        ui.label(track.position.to_string());
+                        ui.add(Label::new(track.position.to_string()).truncate());
                     });
                     tr.col(|ui| {
-                        ui.label(track.title.as_deref().unwrap_or(""));
+                        ui.add(Label::new(track.title.as_deref().unwrap_or("")).truncate());
                     });
                     tr.col(|ui| {
-                        ui.label(format_length(track.length_frames));
+                        ui.add(Label::new(format_length(track.length_frames)).truncate());
                     });
                     if any_artist {
                         tr.col(|ui| {
-                            ui.label(track.artist_credit.as_deref().unwrap_or(""));
+                            ui.add(
+                                Label::new(track.artist_credit.as_deref().unwrap_or(""))
+                                    .truncate(),
+                            );
                         });
                     } else {
                         tr.col(|_ui| {});
@@ -579,17 +583,17 @@ fn toc_table(ui: &mut Ui, toc: &phono_junk_core::Toc, sidecar: &phono_junk_lib::
         } else {
             Column::exact(0.0)
         })
-        .header(18.0, |mut h| {
-            h.col(|ui| { ui.label("#"); });
-            h.col(|ui| { ui.label("Length"); });
-            h.col(|ui| { ui.label("Start"); });
+        .header(24.0, |mut h| {
+            h.col(|ui| table_header::static_header(ui, "#"));
+            h.col(|ui| table_header::static_header(ui, "Length"));
+            h.col(|ui| table_header::static_header(ui, "Start"));
             if any_title {
-                h.col(|ui| { ui.label("Title (CD-TEXT)"); });
+                h.col(|ui| table_header::static_header(ui, "Title (CD-TEXT)"));
             } else {
                 h.col(|_ui| {});
             }
             if any_performer {
-                h.col(|ui| { ui.label("Performer"); });
+                h.col(|ui| table_header::static_header(ui, "Performer"));
             } else {
                 h.col(|_ui| {});
             }
@@ -605,19 +609,19 @@ fn toc_table(ui: &mut Ui, toc: &phono_junk_core::Toc, sidecar: &phono_junk_lib::
                 let length_frames = next.saturating_sub(start) as u64;
                 body.row(16.0, |mut tr| {
                     tr.col(|ui| {
-                        ui.label(track_number.to_string());
+                        ui.add(Label::new(track_number.to_string()).truncate());
                     });
                     tr.col(|ui| {
-                        ui.label(format_length(Some(length_frames)));
+                        ui.add(Label::new(format_length(Some(length_frames))).truncate());
                     });
                     tr.col(|ui| {
-                        ui.label(start.to_string());
+                        ui.add(Label::new(start.to_string()).truncate());
                     });
                     if any_title {
                         tr.col(|ui| {
                             let pos = track_number as u8;
                             let t = sidecar.cdtext_titles.get(&pos).cloned().unwrap_or_default();
-                            ui.label(t);
+                            ui.add(Label::new(t).truncate());
                         });
                     } else {
                         tr.col(|_ui| {});
@@ -630,7 +634,7 @@ fn toc_table(ui: &mut Ui, toc: &phono_junk_core::Toc, sidecar: &phono_junk_lib::
                                 .get(&pos)
                                 .cloned()
                                 .unwrap_or_default();
-                            ui.label(p);
+                            ui.add(Label::new(p).truncate());
                         });
                     } else {
                         tr.col(|_ui| {});

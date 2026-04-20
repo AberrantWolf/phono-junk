@@ -6,7 +6,7 @@ use std::sync::mpsc;
 use phono_junk_db::crud;
 use phono_junk_lib::PhonoContext;
 use phono_junk_lib::env::{default_db_path, default_user_agent};
-use phono_junk_lib::list::{ListEntry, ListFilters, load_list_entries};
+use phono_junk_lib::list::{ListEntry, ListFilters, SortDir, SortKey, load_list_entries};
 use rusqlite::Connection;
 
 use crate::state::{AppMessage, BackgroundOperation, DetailCache, EntryKey, handle_message};
@@ -26,6 +26,11 @@ pub struct PhonoApp {
     /// [`filter_year_error`](Self::filter_year_error) when the user edits it.
     pub filter_year_text: String,
     pub filter_year_error: Option<String>,
+
+    /// Active sort column and direction for the album list. Applied to
+    /// the filtered entry stream right before the table renders.
+    pub sort_key: SortKey,
+    pub sort_dir: SortDir,
 
     /// Surfaced in the view when a DB open / row load / background
     /// operation fails.
@@ -92,6 +97,8 @@ impl PhonoApp {
             list_filters: ListFilters::default(),
             filter_year_text: String::new(),
             filter_year_error: None,
+            sort_key: SortKey::default(),
+            sort_dir: SortDir::default(),
             load_error: None,
             status_message: None,
             phono_ctx,
@@ -396,16 +403,14 @@ impl eframe::App for PhonoApp {
             });
         }
 
-        if self.detail_open && self.focused_entry.is_some() {
-            egui::SidePanel::right("detail_panel")
-                .resizable(true)
-                .default_width(420.0)
-                .width_range(320.0..=640.0)
-                .show(ctx, |ui| {
-                    views::detail::show(ui, self);
-                });
-        }
-
+        // The detail panel used to mount as a top-level `SidePanel::right`
+        // alongside the `CentralPanel`, but that made it span the full
+        // window height — including alongside the toolbar/filter bar,
+        // which looked awkward — and it was sized at the window level, so
+        // the CentralPanel's inner table never shrank narrow enough to
+        // actually trigger the horizontal scrollbar. The detail now
+        // nests inside the album-list view (see `views::album_list::show`),
+        // sharing width only with the table body.
         egui::CentralPanel::default().show(ctx, |ui| {
             views::album_list::show(ui, self);
         });

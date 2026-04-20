@@ -62,7 +62,12 @@ fn stage_arver_fixture(into: &Path) -> PathBuf {
 }
 
 fn phono() -> Command {
-    Command::cargo_bin("phono-junk").unwrap()
+    let mut cmd = Command::cargo_bin("phono-junk").unwrap();
+    // Skip the OS keychain read — on macOS it otherwise triggers a
+    // consent prompt per invocation and spams the user during
+    // `cargo test`. Honored by `PhonoContext::with_default_providers`.
+    cmd.env("PHONO_SKIP_KEYRING", "1");
+    cmd
 }
 
 #[test]

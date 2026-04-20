@@ -2,3 +2,4 @@
 
 pub mod activity_bar;
 pub mod status_bar;
+pub mod table_header;

@@ -58,15 +58,19 @@
 //!     the garbage row → Identify (1); watch the activity bar tick;
 //!     the row stays unidentified (expected — bad data) but no panic.
 
-use egui::{RichText, TextEdit, Ui};
+use egui::{Label, RichText, TextEdit, Ui};
 use egui_extras::{Column, TableBuilder};
 use phono_junk_core::IdentificationState;
-use phono_junk_lib::list::{ListEntry, ListRow, UnidentifiedRow, YearSpec, filter_entries};
+use phono_junk_lib::list::{
+    ListEntry, ListRow, SortKey, UnidentifiedRow, YearSpec, filter_entries, sort_entries,
+};
 
 use crate::app::PhonoApp;
 use crate::backend;
 use crate::fonts;
 use crate::state::EntryKey;
+use crate::views::detail;
+use crate::widgets::table_header;
 
 pub fn show(ui: &mut Ui, app: &mut PhonoApp) {
     toolbar(ui, app);
@@ -74,6 +78,23 @@ pub fn show(ui: &mut Ui, app: &mut PhonoApp) {
     filter_bar(ui, app);
     selection_bar(ui, app);
     ui.separator();
+
+    // Detail panel nests inside the album-list view (rather than
+    // mounting at the window level) so the toolbar and filter bar stay
+    // full-width, and the table body's viewport actually shrinks when
+    // the detail panel opens — which is what makes the horizontal
+    // scrollbar show when the table outgrows the remaining space.
+    // `show_inside` must be called before the table so egui can claim
+    // the right-side column before laying out the remainder.
+    if app.detail_open && app.focused_entry.is_some() {
+        egui::SidePanel::right("detail_panel")
+            .resizable(true)
+            .default_width(420.0)
+            .width_range(320.0..=640.0)
+            .show_inside(ui, |ui| {
+                detail::show(ui, app);
+            });
+    }
     table(ui, app);
 }
 
@@ -356,7 +377,11 @@ fn table(ui: &mut Ui, app: &mut PhonoApp) {
         return;
     }
 
-    let entries: Vec<ListEntry> = filter_entries(app.list_entries.clone(), &app.list_filters);
+    let entries: Vec<ListEntry> = sort_entries(
+        filter_entries(app.list_entries.clone(), &app.list_filters),
+        app.sort_key,
+        app.sort_dir,
+    );
 
     // Working rows need ~10Hz repaint so the spinner animates without
     // idle CPU burn when nothing is in flight. `request_repaint_after`
@@ -374,44 +399,83 @@ fn table(ui: &mut Ui, app: &mut PhonoApp) {
     // parent style into their child UIs.
     ui.style_mut().interaction.selectable_labels = false;
 
-    TableBuilder::new(ui)
-        .striped(true)
-        .resizable(true)
-        .sense(egui::Sense::click())
-        .column(Column::initial(32.0))                   // Status icon
-        .column(Column::initial(240.0).at_least(120.0)) // Title
-        .column(Column::initial(160.0).at_least(80.0))  // Artist
-        .column(Column::initial(60.0))                  // Year
-        .column(Column::initial(60.0))                  // Country
-        .column(Column::initial(60.0))                  // Lang
-        .column(Column::initial(140.0).at_least(80.0))  // Label
-        .column(Column::initial(55.0))                  // Discs
-        .column(Column::initial(70.0))                  // Releases
-        .header(20.0, |mut header| {
-            for heading in [
-                "", "Title", "Artist", "Year", "Country", "Lang", "Label", "Discs", "Releases",
-            ] {
-                header.col(|ui| {
-                    ui.label(RichText::new(heading).family(egui::FontFamily::Name(
-                        fonts::FAMILY_BOLD.into(),
-                    )));
-                });
-            }
-        })
-        .body(|mut body| {
-            for (idx, entry) in entries.iter().enumerate() {
-                let key = entry_key(entry);
-                let selected = app.selected.contains(&key);
-                body.row(18.0, |mut tr| {
-                    tr.set_selected(selected);
-                    status_cell(&mut tr, entry);
-                    match entry {
-                        ListEntry::Album(row) => album_cells(&mut tr, row),
-                        ListEntry::Unidentified(row) => unidentified_cells(&mut tr, row),
+    // Wrap in ScrollArea::both and disable TableBuilder's internal
+    // scroll area via `.vscroll(false)`. TableBuilder's internal
+    // ScrollArea hardcodes the horizontal axis disabled, so wrapping
+    // the default TableBuilder in an outer horizontal ScrollArea was
+    // a no-op — the inner area was already bounded to its caller's
+    // viewport. Turning the internal ScrollArea off lets column widths
+    // overflow naturally, and the outer `ScrollArea::both` picks up
+    // both axes. `.auto_shrink([false, false])` keeps the scroll area
+    // filling the central panel even when the table has few rows.
+    //
+    // Every resizable column pins `at_least` equal to its initial
+    // width so the table's natural horizontal size is stable — without
+    // this, `to_lengths` can choose smaller widths and nothing
+    // overflows horizontally.
+    egui::ScrollArea::both()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let mut next_sort: Option<(SortKey, phono_junk_lib::list::SortDir)> = None;
+            let current_key = app.sort_key;
+            let current_dir = app.sort_dir;
+
+            TableBuilder::new(ui)
+                .striped(true)
+                .resizable(true)
+                .vscroll(false)
+                .sense(egui::Sense::click())
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .column(Column::exact(32.0))                     // Status icon
+                .column(Column::initial(240.0).at_least(240.0)) // Title
+                .column(Column::initial(160.0).at_least(160.0)) // Artist
+                .column(Column::initial(60.0).at_least(60.0))   // Year
+                .column(Column::initial(60.0).at_least(60.0))   // Country
+                .column(Column::initial(60.0).at_least(60.0))   // Lang
+                .column(Column::initial(140.0).at_least(140.0)) // Label
+                .column(Column::initial(55.0).at_least(55.0))   // Discs
+                .column(Column::initial(70.0).at_least(70.0))   // Releases
+                .header(24.0, |mut header| {
+                    header.col(|ui| table_header::static_header(ui, ""));
+                    for (label, key) in [
+                        ("Title", SortKey::Title),
+                        ("Artist", SortKey::Artist),
+                        ("Year", SortKey::Year),
+                        ("Country", SortKey::Country),
+                        ("Lang", SortKey::Language),
+                        ("Label", SortKey::Label),
+                        ("Discs", SortKey::Discs),
+                        ("Releases", SortKey::Releases),
+                    ] {
+                        header.col(|ui| {
+                            if let Some(sel) =
+                                table_header::sort_header(ui, label, key, current_key, current_dir)
+                            {
+                                next_sort = Some(sel);
+                            }
+                        });
                     }
-                    let response = tr.response();
-                    handle_row_interaction(&response, app, &entries, idx, key);
+                })
+                .body(|mut body| {
+                    for (idx, entry) in entries.iter().enumerate() {
+                        let key = entry_key(entry);
+                        let selected = app.selected.contains(&key);
+                        body.row(18.0, |mut tr| {
+                            tr.set_selected(selected);
+                            status_cell(&mut tr, entry);
+                            match entry {
+                                ListEntry::Album(row) => album_cells(&mut tr, row),
+                                ListEntry::Unidentified(row) => unidentified_cells(&mut tr, row),
+                            }
+                            let response = tr.response();
+                            handle_row_interaction(&response, app, &entries, idx, key);
+                        });
+                    }
                 });
+
+            if let Some((key, dir)) = next_sort {
+                app.sort_key = key;
+                app.sort_dir = dir;
             }
         });
 }
@@ -478,29 +542,29 @@ fn album_cells(tr: &mut egui_extras::TableRow<'_, '_>, row: &ListRow) {
         row.country.as_deref(),
     );
     tr.col(|ui| {
-        ui.label(RichText::new(&row.title).family(family.clone()));
+        ui.add(Label::new(RichText::new(&row.title).family(family.clone())).truncate());
     });
     tr.col(|ui| {
         let txt = row.artist.clone().unwrap_or_default();
-        ui.label(RichText::new(txt).family(family.clone()));
+        ui.add(Label::new(RichText::new(txt).family(family.clone())).truncate());
     });
     tr.col(|ui| {
-        ui.label(row.year.map(|y| y.to_string()).unwrap_or_default());
+        ui.add(Label::new(row.year.map(|y| y.to_string()).unwrap_or_default()).truncate());
     });
     tr.col(|ui| {
-        ui.label(row.country.clone().unwrap_or_default());
+        ui.add(Label::new(row.country.clone().unwrap_or_default()).truncate());
     });
     tr.col(|ui| {
-        ui.label(row.language.clone().unwrap_or_default());
+        ui.add(Label::new(row.language.clone().unwrap_or_default()).truncate());
     });
     tr.col(|ui| {
-        ui.label(row.label.clone().unwrap_or_default());
+        ui.add(Label::new(row.label.clone().unwrap_or_default()).truncate());
     });
     tr.col(|ui| {
-        ui.label(row.disc_count.to_string());
+        ui.add(Label::new(row.disc_count.to_string()).truncate());
     });
     tr.col(|ui| {
-        ui.label(row.release_count.to_string());
+        ui.add(Label::new(row.release_count.to_string()).truncate());
     });
 }
 
@@ -512,18 +576,21 @@ fn unidentified_cells(tr: &mut egui_extras::TableRow<'_, '_>, row: &Unidentified
         .or_else(|| row.display_path().map(|p| p.display().to_string()))
         .unwrap_or_else(|| format!("rip {}", row.rip_file_id));
     tr.col(|ui| {
-        ui.label(RichText::new(title).weak());
+        ui.add(Label::new(RichText::new(title).weak()).truncate());
     });
     tr.col(|ui| {
-        ui.label(
-            RichText::new("(unidentified)")
-                .italics()
-                .color(egui::Color32::GRAY),
+        ui.add(
+            Label::new(
+                RichText::new("(unidentified)")
+                    .italics()
+                    .color(egui::Color32::GRAY),
+            )
+            .truncate(),
         );
     });
     for _ in 0..6 {
         tr.col(|ui| {
-            ui.label("");
+            ui.add(Label::new("").truncate());
         });
     }
 }

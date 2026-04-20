@@ -226,6 +226,8 @@ Captured from the original bootstrap plan; not blocking v1 but known wants.
 
 - [ ] **Batch the list-view ripper-audit query** — `phono-junk-lib::list::album_has_non_redumper_rip` (Sprint 24) runs one `EXISTS`-per-album against `rip_file_provenance`. Fine at personal-library scale, but at thousands-of-albums it's thousands of round trips. Fold into the main `load_list_rows` pass as a single `GROUP BY album_id` JOIN when the pain shows. Also consider a `list_albums_with_audit_flags()` returning `(Album, has_non_redumper_rip)` in one go so the list module doesn't need to issue per-album queries. Same consideration may apply to the releases/discs iteration already in `row_for_album`.
 
+- [ ] **CLI `list --sort` flag** — `phono_junk_lib::list::sort_entries` + `SortKey` / `SortDir` shipped with the album-list table cleanup, but the CLI's `list` subcommand still only calls `filter_rows` (identified-only) in fixed album-id order. Extend `phono-junk-cli` to consume `filter_entries` + `sort_entries` and expose `--sort <column>` / `--desc`. Out of scope of the GUI pass that introduced the primitives.
+
 ## Cross-repo infrastructure
 
 Items that affect both phono-junk and retro-junk via `junk-libs`. Out of scope for MVP; schedule when both products are stable enough to refactor.

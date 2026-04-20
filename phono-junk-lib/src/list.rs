@@ -295,6 +295,117 @@ pub fn filter_entries(entries: Vec<ListEntry>, f: &ListFilters) -> Vec<ListEntry
         .collect()
 }
 
+/// Column the user is sorting the album list by. GUI-only concept for
+/// now — the CLI keeps its fixed album-id order (see TODO.md for the
+/// planned `--sort` flag follow-up).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortKey {
+    Title,
+    Artist,
+    Year,
+    Country,
+    Language,
+    Label,
+    Discs,
+    Releases,
+}
+
+impl Default for SortKey {
+    fn default() -> Self {
+        Self::Title
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDir {
+    Asc,
+    Desc,
+}
+
+impl Default for SortDir {
+    fn default() -> Self {
+        Self::Asc
+    }
+}
+
+/// Sort entries by the chosen key/direction.
+///
+/// Unidentified rows group at the end in `Asc` (and at the start in `Desc`)
+/// regardless of which key is active so the identified "good data" stays
+/// contiguous. Within each group, ties break on title / display filename
+/// for a stable order. `None` fields sort after `Some` in `Asc` — Finder
+/// "empty at the bottom" semantics.
+pub fn sort_entries(mut entries: Vec<ListEntry>, key: SortKey, dir: SortDir) -> Vec<ListEntry> {
+    entries.sort_by(|a, b| {
+        let sa = section_priority(a);
+        let sb = section_priority(b);
+        if sa != sb {
+            return sa.cmp(&sb);
+        }
+        match (a, b) {
+            (ListEntry::Album(x), ListEntry::Album(y)) => compare_albums(x, y, key),
+            (ListEntry::Unidentified(x), ListEntry::Unidentified(y)) => {
+                unidentified_display(x).cmp(&unidentified_display(y))
+            }
+            _ => std::cmp::Ordering::Equal,
+        }
+    });
+    if matches!(dir, SortDir::Desc) {
+        entries.reverse();
+    }
+    entries
+}
+
+fn section_priority(e: &ListEntry) -> u8 {
+    match e {
+        ListEntry::Album(_) => 0,
+        ListEntry::Unidentified(_) => 1,
+    }
+}
+
+fn compare_albums(a: &ListRow, b: &ListRow, key: SortKey) -> std::cmp::Ordering {
+    match key {
+        SortKey::Title => cmp_ci(&a.title, &b.title),
+        SortKey::Artist => cmp_opt_ci(a.artist.as_deref(), b.artist.as_deref()),
+        SortKey::Year => cmp_opt(a.year, b.year),
+        SortKey::Country => cmp_opt_ci(a.country.as_deref(), b.country.as_deref()),
+        SortKey::Language => cmp_opt_ci(a.language.as_deref(), b.language.as_deref()),
+        SortKey::Label => cmp_opt_ci(a.label.as_deref(), b.label.as_deref()),
+        SortKey::Discs => a.disc_count.cmp(&b.disc_count),
+        SortKey::Releases => a.release_count.cmp(&b.release_count),
+    }
+    .then_with(|| cmp_ci(&a.title, &b.title))
+}
+
+fn cmp_ci(a: &str, b: &str) -> std::cmp::Ordering {
+    a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase())
+}
+
+fn cmp_opt_ci(a: Option<&str>, b: Option<&str>) -> std::cmp::Ordering {
+    match (a, b) {
+        (Some(x), Some(y)) => cmp_ci(x, y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+fn cmp_opt<T: Ord>(a: Option<T>, b: Option<T>) -> std::cmp::Ordering {
+    match (a, b) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+fn unidentified_display(u: &UnidentifiedRow) -> String {
+    u.display_path()
+        .and_then(|p| p.file_name())
+        .map(|s| s.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_else(|| format!("~rip-{}", u.rip_file_id))
+}
+
 fn matches(row: &ListRow, f: &ListFilters) -> bool {
     if let Some(needle) = f.artist.as_deref() {
         let hay = row.artist.as_deref().unwrap_or("");
@@ -724,6 +835,52 @@ mod tests {
         // Album D: no rip files at all. Should be false (not audit-worthy).
         let (d, _) = seed_album(&conn, "D");
         assert!(!album_has_non_redumper_rip(&conn, d).unwrap());
+    }
+
+    #[test]
+    fn sort_entries_title_asc_groups_unidentified_at_end() {
+        let entries = vec![
+            ListEntry::Album(mk_row(1, "Zephyr", None, None, None, None)),
+            ListEntry::Unidentified(mk_unid(7, "/tmp/z.cue")),
+            ListEntry::Album(mk_row(2, "Apple", None, None, None, None)),
+            ListEntry::Unidentified(mk_unid(8, "/tmp/a.cue")),
+        ];
+        let out = sort_entries(entries, SortKey::Title, SortDir::Asc);
+        assert!(matches!(&out[0], ListEntry::Album(r) if r.title == "Apple"));
+        assert!(matches!(&out[1], ListEntry::Album(r) if r.title == "Zephyr"));
+        assert!(matches!(&out[2], ListEntry::Unidentified(u) if u.rip_file_id == 8));
+        assert!(matches!(&out[3], ListEntry::Unidentified(u) if u.rip_file_id == 7));
+    }
+
+    #[test]
+    fn sort_entries_desc_reverses_both_groups() {
+        let entries = vec![
+            ListEntry::Album(mk_row(1, "Apple", None, None, None, None)),
+            ListEntry::Album(mk_row(2, "Zephyr", None, None, None, None)),
+            ListEntry::Unidentified(mk_unid(7, "/tmp/a.cue")),
+        ];
+        let out = sort_entries(entries, SortKey::Title, SortDir::Desc);
+        assert!(matches!(&out[0], ListEntry::Unidentified(_)));
+        assert!(matches!(&out[1], ListEntry::Album(r) if r.title == "Zephyr"));
+        assert!(matches!(&out[2], ListEntry::Album(r) if r.title == "Apple"));
+    }
+
+    #[test]
+    fn sort_entries_year_puts_none_after_some() {
+        let entries = vec![
+            ListEntry::Album(mk_row(1, "A", None, None, None, None)),
+            ListEntry::Album(mk_row(2, "B", None, Some(1990), None, None)),
+            ListEntry::Album(mk_row(3, "C", None, Some(2005), None, None)),
+        ];
+        let out = sort_entries(entries, SortKey::Year, SortDir::Asc);
+        let years: Vec<_> = out
+            .iter()
+            .filter_map(|e| match e {
+                ListEntry::Album(r) => Some(r.year),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(years, vec![Some(1990), Some(2005), None]);
     }
 
     #[test]
