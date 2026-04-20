@@ -8,7 +8,7 @@ use phono_junk_lib::env::{default_db_path, default_user_agent};
 use phono_junk_lib::list::{ListEntry, ListFilters, load_list_entries};
 use rusqlite::Connection;
 
-use crate::state::{AppMessage, BackgroundOperation, EntryKey, handle_message};
+use crate::state::{AppMessage, BackgroundOperation, DetailCache, EntryKey, handle_message};
 use crate::{views, widgets};
 
 pub struct PhonoApp {
@@ -51,6 +51,16 @@ pub struct PhonoApp {
     /// [`widgets::activity_bar`] in the bottom panel.
     pub operations: Vec<BackgroundOperation>,
 
+    /// Whether the right-side detail panel is shown. Toggled by the toolbar
+    /// button and auto-opened on first row click.
+    pub detail_open: bool,
+    /// The entry the detail panel is currently focused on. Separate from
+    /// `selected` so bulk-op multi-select semantics don't fight the panel.
+    pub focused_entry: Option<EntryKey>,
+    /// Lazily-built typed payload for the focused entry. Rebuilt when
+    /// `focused_entry` changes or `LibraryChanged` invalidates the cache.
+    pub detail_cache: Option<DetailCache>,
+
     /// Channels for background work — drained at the top of every
     /// `update` frame via [`handle_message`].
     pub message_rx: mpsc::Receiver<AppMessage>,
@@ -80,6 +90,9 @@ impl PhonoApp {
             selected: HashSet::new(),
             selection_anchor: None,
             operations: Vec::new(),
+            detail_open: false,
+            focused_entry: None,
+            detail_cache: None,
             message_rx: rx,
             message_tx: tx,
         }
@@ -112,14 +125,68 @@ impl PhonoApp {
                 }
             }
         }
+        // Remember the path even if open fails (e.g. VersionMismatch after a
+        // schema bump) so the user can use the Reset DB button to recover
+        // without having to re-locate the file by hand.
+        self.db_path = Some(path.clone());
         match phono_junk_db::open_database(&path) {
             Ok(conn) => {
                 self.db_conn = Some(conn);
-                self.db_path = Some(path);
                 self.reload_rows();
             }
             Err(e) => {
                 self.load_error = Some(format!("open default library: {e}"));
+            }
+        }
+    }
+
+    /// Delete the currently-open catalog DB and recreate an empty one at
+    /// the same path. Pre-release convenience so a `CURRENT_VERSION` bump
+    /// doesn't force the user to `rm` by hand. Closes the connection,
+    /// removes `<db>`, `<db>-wal`, `<db>-shm` (WAL sidecars), then
+    /// re-opens. State (selection, focus, detail cache, status, errors,
+    /// in-flight operations) is cleared. The caller (toolbar button)
+    /// owns the user-confirmation dialog — this method assumes go-ahead.
+    pub fn reset_database(&mut self) {
+        let Some(path) = self.db_path.clone() else {
+            self.load_error = Some("reset: no database is open".into());
+            return;
+        };
+        // Drop the connection so file handles are released before unlink
+        // (matters on Windows; no-op on POSIX but harmless).
+        self.db_conn = None;
+
+        for suffix in ["", "-wal", "-shm"] {
+            let p = if suffix.is_empty() {
+                path.clone()
+            } else {
+                let mut s = path.as_os_str().to_owned();
+                s.push(suffix);
+                PathBuf::from(s)
+            };
+            if p.exists() {
+                if let Err(e) = std::fs::remove_file(&p) {
+                    self.load_error = Some(format!("reset: remove {}: {e}", p.display()));
+                    return;
+                }
+            }
+        }
+
+        match phono_junk_db::open_database(&path) {
+            Ok(conn) => {
+                self.db_conn = Some(conn);
+                self.list_entries.clear();
+                self.selected.clear();
+                self.selection_anchor = None;
+                self.focused_entry = None;
+                self.detail_cache = None;
+                self.operations.clear();
+                self.status_message = Some(format!("reset: {}", path.display()));
+                self.load_error = None;
+                self.reload_rows();
+            }
+            Err(e) => {
+                self.load_error = Some(format!("reset: re-open {}: {e}", path.display()));
             }
         }
     }
@@ -144,6 +211,12 @@ impl PhonoApp {
                 if let Some(anchor) = self.selection_anchor {
                     if !valid.contains(&anchor) {
                         self.selection_anchor = None;
+                    }
+                }
+                if let Some(focus) = self.focused_entry {
+                    if !valid.contains(&focus) {
+                        self.focused_entry = None;
+                        self.detail_cache = None;
                     }
                 }
                 self.list_entries = entries;
@@ -205,6 +278,8 @@ mod tests {
                 identification_source: None,
                 accuraterip_status: None,
                 last_verified_at: None,
+                last_identify_errors: None,
+                last_identify_at: None,
             },
         )
         .unwrap()
@@ -258,10 +333,27 @@ impl eframe::App for PhonoApp {
             handle_message(self, msg, ctx);
         }
 
+        // Bottom panels stack outermost-first, so the status bar (mounted
+        // first) sits at the very bottom edge; the activity bar (when
+        // present) stacks above it.
+        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            widgets::status_bar::show(ui, self);
+        });
+
         if !self.operations.is_empty() {
             egui::TopBottomPanel::bottom("activity_bar").show(ctx, |ui| {
                 widgets::activity_bar::show(ui, &mut self.operations);
             });
+        }
+
+        if self.detail_open && self.focused_entry.is_some() {
+            egui::SidePanel::right("detail_panel")
+                .resizable(true)
+                .default_width(420.0)
+                .width_range(320.0..=640.0)
+                .show(ctx, |ui| {
+                    views::detail::show(ui, self);
+                });
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {

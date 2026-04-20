@@ -95,6 +95,26 @@ pub struct RipFile {
     pub identification_source: Option<IdentificationSource>,
     pub accuraterip_status: Option<String>,
     pub last_verified_at: Option<String>,
+    /// Per-provider error log from the most recent identify attempt.
+    /// Persisted so the GUI can explain *why* an unidentified rip didn't match
+    /// without forcing the user to re-run identify just to read errors.
+    /// Messages are humanized at the boundary (see
+    /// `phono_junk_lib::identify::humanize_provider_error`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_identify_errors: Option<Vec<IdentifyAttemptError>>,
+    pub last_identify_at: Option<String>,
+}
+
+/// One row of "what each provider said" from the most recent identify attempt.
+/// Stored as JSON in `rip_files.last_identify_errors`.
+///
+/// Has no `kind` discriminant — the human message carries enough context for
+/// the UI, and keeping this catalog-level type free of trait-crate dependencies
+/// preserves the layering (catalog never depends on `phono-junk-identify`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdentifyAttemptError {
+    pub provider: String,
+    pub message: String,
 }
 
 /// Asset types mirror those in `phono-junk-identify::AssetType`.
@@ -150,6 +170,24 @@ pub struct Asset {
     pub source_url: Option<String>,
     pub file_path: Option<PathBuf>,
     pub scraped_at: Option<String>,
+}
+
+/// Pick the canonical front-cover from a release's assets.
+///
+/// Filters to `AssetType::FrontCover` then picks the lowest
+/// `(group_id, sequence, id)` so multi-page front-cover groups (rare, but
+/// some MB releases tag both a digipak and a sleeve) yield a stable choice.
+/// `None` group_ids sort last via `i64::MAX` so explicit groupings beat
+/// implicit ones.
+///
+/// Single canonical implementation per CLAUDE.md "one implementation per
+/// algorithm" — consumed by both `phono-junk-extract` (FLAC art embed) and
+/// `phono-junk-lib::detail` (GUI cover-art block).
+pub fn pick_front_cover(assets: &[Asset]) -> Option<&Asset> {
+    assets
+        .iter()
+        .filter(|a| a.asset_type == AssetType::FrontCover)
+        .min_by_key(|a| (a.group_id.unwrap_or(i64::MAX), a.sequence, a.id))
 }
 
 /// A field-level conflict between two sources.

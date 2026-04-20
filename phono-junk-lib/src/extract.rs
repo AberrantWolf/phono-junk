@@ -14,7 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use junk_libs_disc::{TrackLayout, TrackPcmReader};
-use phono_junk_catalog::{Album, Asset, AssetType, Disc, Id, Release, RipFile, Track};
+use phono_junk_catalog::{Album, Asset, Disc, Id, Release, RipFile, Track};
 use phono_junk_db::{DbError, crud};
 use phono_junk_extract::{
     ExtractError as ExtractPrimitiveError, TrackTags, encode_flac_track, plan_disc_directory,
@@ -45,6 +45,14 @@ pub enum ExportError {
     Analysis(#[from] junk_libs_core::AnalysisError),
     #[error("HTTP error fetching asset: {0}")]
     Http(#[from] HttpError),
+    #[error("asset {asset_id} fetch {url} returned HTTP {status}")]
+    AssetFetchStatus {
+        asset_id: Id,
+        url: String,
+        status: u16,
+    },
+    #[error("asset {asset_id}: file_path {path} is relative but no library_root is available — cached artwork can't be resolved")]
+    AssetPathUnresolved { asset_id: Id, path: PathBuf },
     #[error("catalog row missing: {0}")]
     MissingRow(&'static str),
     #[error("disc {0} has no linked rip_files row")]
@@ -301,18 +309,11 @@ fn resolve_cover_bytes(
     assets: &[Asset],
     library_root: &Path,
 ) -> Result<Option<Vec<u8>>, ExportError> {
-    let Some(asset) = pick_front_cover(assets) else {
+    let Some(asset) = phono_junk_catalog::pick_front_cover(assets) else {
         return Ok(None);
     };
     let bytes = ensure_asset_cached(ctx, conn, asset, library_root)?;
     Ok(Some(bytes))
-}
-
-fn pick_front_cover(assets: &[Asset]) -> Option<&Asset> {
-    assets
-        .iter()
-        .filter(|a| a.asset_type == AssetType::FrontCover)
-        .min_by_key(|a| (a.group_id.unwrap_or(i64::MAX), a.sequence, a.id))
 }
 
 /// Ensure an Asset's bytes exist on disk under `library_root/.cache/assets/`.
@@ -343,6 +344,13 @@ fn ensure_asset_cached(
             "front-cover asset has neither file_path nor source_url".into(),
         ))?;
     let resp = http.get(url)?;
+    if !(200..300).contains(&resp.status) {
+        return Err(ExportError::AssetFetchStatus {
+            asset_id: asset.id,
+            url: url.to_string(),
+            status: resp.status,
+        });
+    }
     let ext = cover_extension(&resp.content_type, url);
     let cache_dir = library_root.join(".cache").join("assets");
     fs::create_dir_all(&cache_dir).map_err(|e| ExportError::io(&cache_dir, e))?;
@@ -355,6 +363,50 @@ fn ensure_asset_cached(
     let mut updated = asset.clone();
     updated.file_path = Some(relative);
     crud::update_asset(conn, &updated)?;
+    Ok(resp.body)
+}
+
+/// Fetch raw bytes for an asset without persisting them to disk or touching
+/// the catalog. For GUI display surfaces (Sprint 18 detail panel) where the
+/// caller has no `library_root` and just needs bytes for an in-memory image.
+///
+/// Tries `asset.file_path` first if it points at a readable absolute file
+/// (post-export caches land in absolute form on the same machine; relative
+/// `.cache/assets/...` paths can't be resolved without the library root and
+/// fall through to HTTP).
+pub fn fetch_asset_bytes(
+    ctx: &PhonoContext,
+    asset: &Asset,
+) -> Result<Vec<u8>, ExportError> {
+    if let Some(path) = asset.file_path.as_ref() {
+        if path.is_absolute() {
+            if path.exists() {
+                return fs::read(path).map_err(|e| ExportError::io(path.clone(), e));
+            }
+            // Absolute path on record but the file is gone — fall through to
+            // a re-fetch if source_url is present, otherwise surface the miss.
+        } else if asset.source_url.is_none() {
+            return Err(ExportError::AssetPathUnresolved {
+                asset_id: asset.id,
+                path: path.clone(),
+            });
+        }
+    }
+    let http = ctx.http.as_ref().ok_or(ExportError::NoHttpClient)?;
+    let url = asset
+        .source_url
+        .as_deref()
+        .ok_or(ExtractPrimitiveError::InvalidTrack(
+            "asset has neither file_path nor source_url".into(),
+        ))?;
+    let resp = http.get(url)?;
+    if !(200..300).contains(&resp.status) {
+        return Err(ExportError::AssetFetchStatus {
+            asset_id: asset.id,
+            url: url.to_string(),
+            status: resp.status,
+        });
+    }
     Ok(resp.body)
 }
 

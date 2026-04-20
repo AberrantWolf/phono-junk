@@ -245,6 +245,69 @@ fn force_refresh_bypasses_cache() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
+/// A failing identifier should leave a humanized error log on the rip file
+/// so the GUI's detail panel can render "MusicBrainz — network error: …"
+/// without forcing the user to re-run identify just to read the failure.
+#[test]
+fn identify_persists_humanized_provider_errors() {
+    struct FailingMock;
+    impl IdentificationProvider for FailingMock {
+        fn name(&self) -> &'static str {
+            "MusicBrainz"
+        }
+        fn supported_ids(&self) -> &[DiscIdKind] {
+            &[DiscIdKind::MbDiscId]
+        }
+        fn lookup(
+            &self,
+            _toc: &Toc,
+            _ids: &DiscIds,
+            _creds: &Credentials,
+        ) -> Result<Option<ProviderResult>, ProviderError> {
+            Err(ProviderError::Network("connection refused".into()))
+        }
+    }
+
+    let conn = open_conn();
+    let rip_id = crud::insert_rip_file(
+        &conn,
+        &phono_junk_catalog::RipFile {
+            id: 0,
+            disc_id: None,
+            cue_path: Some(std::path::PathBuf::from("/tmp/x.cue")),
+            chd_path: None,
+            bin_paths: vec![],
+            mtime: None,
+            size: None,
+            identification_confidence: phono_junk_core::IdentificationConfidence::Likely,
+            identification_source: None,
+            accuraterip_status: None,
+            last_verified_at: None,
+            last_identify_errors: None,
+            last_identify_at: None,
+        },
+    )
+    .unwrap();
+
+    let mut ctx = PhonoContext::new();
+    ctx.aggregator.register_identifier(Box::new(FailingMock));
+    let out = ctx
+        .identify_disc(&conn, &sample_toc(), &sample_ids(), Some(rip_id), false)
+        .unwrap();
+    assert!(!out.identified);
+
+    let rf = crud::get_rip_file(&conn, rip_id).unwrap().unwrap();
+    let errors = rf.last_identify_errors.expect("errors persisted");
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].provider, "MusicBrainz");
+    assert!(
+        errors[0].message.starts_with("network error:"),
+        "humanized message expected, got: {}",
+        errors[0].message,
+    );
+    assert!(rf.last_identify_at.is_some(), "timestamp persisted");
+}
+
 #[test]
 fn unidentified_marks_rip_file_without_creating_album() {
     let conn = open_conn();
@@ -263,6 +326,8 @@ fn unidentified_marks_rip_file_without_creating_album() {
             identification_source: None,
             accuraterip_status: None,
             last_verified_at: None,
+            last_identify_errors: None,
+            last_identify_at: None,
         },
     )
     .unwrap();

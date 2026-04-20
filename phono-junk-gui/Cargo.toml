@@ -21,6 +21,11 @@ rusqlite.workspace = true
 eframe.workspace = true
 egui.workspace = true
 egui_extras.workspace = true
+# Direct dep so our codec features (jpeg/png/webp) unify with the copy
+# egui_extras pulls in — without this, `install_image_loaders` registers a
+# decoder pipeline with no formats and every cover fails as
+# "No matching image loader format \"Jpeg\"".
+image.workspace = true
 rfd.workspace = true
 log.workspace = true
 env_logger.workspace = true

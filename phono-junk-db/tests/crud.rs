@@ -83,6 +83,11 @@ fn sample_rip_file(disc_id: Option<i64>) -> RipFile {
         identification_source: Some(IdentificationSource::MusicBrainz),
         accuraterip_status: Some("v2 confidence 8".into()),
         last_verified_at: Some("2026-04-19T00:00:00Z".into()),
+        last_identify_errors: Some(vec![phono_junk_catalog::IdentifyAttemptError {
+            provider: "MusicBrainz".into(),
+            message: "no match found".into(),
+        }]),
+        last_identify_at: Some("2026-04-19T00:05:00Z".into()),
     }
 }
 

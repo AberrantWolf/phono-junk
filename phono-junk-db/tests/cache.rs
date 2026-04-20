@@ -17,6 +17,8 @@ fn rip(mtime: i64, size: u64) -> RipFile {
         identification_source: None,
         accuraterip_status: None,
         last_verified_at: None,
+        last_identify_errors: None,
+        last_identify_at: None,
     }
 }
 
@@ -101,6 +103,8 @@ fn chd_rip_round_trips_via_chd_path() {
         identification_source: Some(IdentificationSource::Import),
         accuraterip_status: None,
         last_verified_at: None,
+        last_identify_errors: None,
+        last_identify_at: None,
     };
     let id = cache::upsert_rip_file(&conn, &chd).unwrap();
 

@@ -326,6 +326,8 @@ fn seed_one_disc(db_path: &Path) -> (Id, Id, Id) {
             identification_source: None,
             accuraterip_status: None,
             last_verified_at: None,
+            last_identify_errors: None,
+            last_identify_at: None,
         },
     )
     .unwrap();

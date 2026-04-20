@@ -128,6 +128,8 @@ fn sample_rip_file(disc_id: i64, cue: &Path, bin: &Path) -> RipFile {
         identification_source: Some(IdentificationSource::MusicBrainz),
         accuraterip_status: None,
         last_verified_at: None,
+        last_identify_errors: None,
+        last_identify_at: None,
     }
 }
 

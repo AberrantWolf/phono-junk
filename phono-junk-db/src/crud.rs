@@ -12,7 +12,8 @@
 use std::path::{Path, PathBuf};
 
 use phono_junk_catalog::{
-    Album, Asset, AssetType, Disagreement, Disc, Id, Override, Release, RipFile, Track,
+    Album, Asset, AssetType, Disagreement, Disc, Id, IdentifyAttemptError, Override, Release,
+    RipFile, Track,
 };
 use phono_junk_core::{IdentificationConfidence, IdentificationSource, Toc};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -24,7 +25,7 @@ use crate::DbError;
 // JSON helpers (inline — extract if call-site count grows past a handful).
 // ---------------------------------------------------------------------------
 
-fn json_write<T: Serialize>(value: &T) -> Result<String, DbError> {
+fn json_write<T: Serialize + ?Sized>(value: &T) -> Result<String, DbError> {
     serde_json::to_string(value).map_err(|e| DbError::Migration(format!("json encode: {e}")))
 }
 
@@ -518,6 +519,14 @@ pub fn list_tracks_for_disc(conn: &Connection, disc_id: Id) -> Result<Vec<Track>
 // RipFile
 // ---------------------------------------------------------------------------
 
+/// Single source of truth for the rip_files SELECT column list — keeps the
+/// five callers (get/find_by_cue/find_by_chd/find_for_disc/list_unidentified)
+/// from drifting when fields are added.
+const RIP_FILE_COLUMNS: &str =
+    "id, disc_id, cue_path, chd_path, bin_paths_json, mtime, size, \
+     identification_confidence, identification_source, accuraterip_status, \
+     last_verified_at, last_identify_errors, last_identify_at";
+
 fn row_to_rip_file(row: &Row) -> rusqlite::Result<RipFile> {
     let bin_paths_json: String = row.get("bin_paths_json")?;
     let bin_paths: Vec<PathBuf> = serde_json::from_str(&bin_paths_json).map_err(|e| {
@@ -543,6 +552,18 @@ fn row_to_rip_file(row: &Row) -> rusqlite::Result<RipFile> {
                 Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
             )
         })?;
+    let errors_str: Option<String> = row.get("last_identify_errors")?;
+    let last_identify_errors = errors_str
+        .as_deref()
+        .map(serde_json::from_str::<Vec<IdentifyAttemptError>>)
+        .transpose()
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                Box::new(e),
+            )
+        })?;
     Ok(RipFile {
         id: row.get("id")?,
         disc_id: row.get("disc_id")?,
@@ -555,6 +576,8 @@ fn row_to_rip_file(row: &Row) -> rusqlite::Result<RipFile> {
         identification_source,
         accuraterip_status: row.get("accuraterip_status")?,
         last_verified_at: row.get("last_verified_at")?,
+        last_identify_errors,
+        last_identify_at: row.get("last_identify_at")?,
     })
 }
 
@@ -568,11 +591,18 @@ pub fn insert_rip_file(conn: &Connection, file: &RipFile) -> Result<Id, DbError>
     let cue = opt_path_to_string(&file.cue_path)?;
     let chd = opt_path_to_string(&file.chd_path)?;
     let source = file.identification_source.as_ref().map(source_to_str).transpose()?;
+    let errors_json = file
+        .last_identify_errors
+        .as_ref()
+        .map(json_write)
+        .transpose()?;
     conn.execute(
         "INSERT INTO rip_files (disc_id, cue_path, chd_path, bin_paths_json,
                                 mtime, size, identification_confidence,
-                                identification_source, accuraterip_status, last_verified_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                                identification_source, accuraterip_status,
+                                last_verified_at, last_identify_errors,
+                                last_identify_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             file.disc_id,
             cue,
@@ -584,22 +614,16 @@ pub fn insert_rip_file(conn: &Connection, file: &RipFile) -> Result<Id, DbError>
             source,
             file.accuraterip_status,
             file.last_verified_at,
+            errors_json,
+            file.last_identify_at,
         ],
     )?;
     Ok(conn.last_insert_rowid())
 }
 
 pub fn get_rip_file(conn: &Connection, id: Id) -> Result<Option<RipFile>, DbError> {
-    Ok(conn
-        .query_row(
-            "SELECT id, disc_id, cue_path, chd_path, bin_paths_json, mtime, size,
-                    identification_confidence, identification_source,
-                    accuraterip_status, last_verified_at
-             FROM rip_files WHERE id = ?1",
-            [id],
-            row_to_rip_file,
-        )
-        .optional()?)
+    let sql = format!("SELECT {RIP_FILE_COLUMNS} FROM rip_files WHERE id = ?1");
+    Ok(conn.query_row(&sql, [id], row_to_rip_file).optional()?)
 }
 
 pub fn update_rip_file(conn: &Connection, file: &RipFile) -> Result<(), DbError> {
@@ -612,12 +636,18 @@ pub fn update_rip_file(conn: &Connection, file: &RipFile) -> Result<(), DbError>
     let cue = opt_path_to_string(&file.cue_path)?;
     let chd = opt_path_to_string(&file.chd_path)?;
     let source = file.identification_source.as_ref().map(source_to_str).transpose()?;
+    let errors_json = file
+        .last_identify_errors
+        .as_ref()
+        .map(json_write)
+        .transpose()?;
     conn.execute(
         "UPDATE rip_files SET disc_id = ?1, cue_path = ?2, chd_path = ?3,
                               bin_paths_json = ?4, mtime = ?5, size = ?6,
                               identification_confidence = ?7, identification_source = ?8,
-                              accuraterip_status = ?9, last_verified_at = ?10
-         WHERE id = ?11",
+                              accuraterip_status = ?9, last_verified_at = ?10,
+                              last_identify_errors = ?11, last_identify_at = ?12
+         WHERE id = ?13",
         params![
             file.disc_id,
             cue,
@@ -629,6 +659,8 @@ pub fn update_rip_file(conn: &Connection, file: &RipFile) -> Result<(), DbError>
             source,
             file.accuraterip_status,
             file.last_verified_at,
+            errors_json,
+            file.last_identify_at,
             file.id,
         ],
     )?;
@@ -645,16 +677,8 @@ pub fn find_rip_file_by_cue_path(
     cue_path: &Path,
 ) -> Result<Option<RipFile>, DbError> {
     let path_str = path_to_string(cue_path)?;
-    Ok(conn
-        .query_row(
-            "SELECT id, disc_id, cue_path, chd_path, bin_paths_json, mtime, size,
-                    identification_confidence, identification_source,
-                    accuraterip_status, last_verified_at
-             FROM rip_files WHERE cue_path = ?1 LIMIT 1",
-            [path_str],
-            row_to_rip_file,
-        )
-        .optional()?)
+    let sql = format!("SELECT {RIP_FILE_COLUMNS} FROM rip_files WHERE cue_path = ?1 LIMIT 1");
+    Ok(conn.query_row(&sql, [path_str], row_to_rip_file).optional()?)
 }
 
 pub fn find_rip_file_by_chd_path(
@@ -662,16 +686,8 @@ pub fn find_rip_file_by_chd_path(
     chd_path: &Path,
 ) -> Result<Option<RipFile>, DbError> {
     let path_str = path_to_string(chd_path)?;
-    Ok(conn
-        .query_row(
-            "SELECT id, disc_id, cue_path, chd_path, bin_paths_json, mtime, size,
-                    identification_confidence, identification_source,
-                    accuraterip_status, last_verified_at
-             FROM rip_files WHERE chd_path = ?1 LIMIT 1",
-            [path_str],
-            row_to_rip_file,
-        )
-        .optional()?)
+    let sql = format!("SELECT {RIP_FILE_COLUMNS} FROM rip_files WHERE chd_path = ?1 LIMIT 1");
+    Ok(conn.query_row(&sql, [path_str], row_to_rip_file).optional()?)
 }
 
 /// Return the first `RipFile` linked to `disc_id`, if any.
@@ -684,27 +700,40 @@ pub fn find_rip_file_for_disc(
     conn: &Connection,
     disc_id: Id,
 ) -> Result<Option<RipFile>, DbError> {
-    Ok(conn
-        .query_row(
-            "SELECT id, disc_id, cue_path, chd_path, bin_paths_json, mtime, size,
-                    identification_confidence, identification_source,
-                    accuraterip_status, last_verified_at
-             FROM rip_files WHERE disc_id = ?1 ORDER BY id LIMIT 1",
-            [disc_id],
-            row_to_rip_file,
-        )
-        .optional()?)
+    let sql = format!(
+        "SELECT {RIP_FILE_COLUMNS} FROM rip_files WHERE disc_id = ?1 ORDER BY id LIMIT 1"
+    );
+    Ok(conn.query_row(&sql, [disc_id], row_to_rip_file).optional()?)
 }
 
 pub fn list_unidentified_rip_files(conn: &Connection) -> Result<Vec<RipFile>, DbError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, disc_id, cue_path, chd_path, bin_paths_json, mtime, size,
-                identification_confidence, identification_source,
-                accuraterip_status, last_verified_at
-         FROM rip_files WHERE disc_id IS NULL ORDER BY id",
-    )?;
+    let sql =
+        format!("SELECT {RIP_FILE_COLUMNS} FROM rip_files WHERE disc_id IS NULL ORDER BY id");
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], row_to_rip_file)?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Targeted identify-attempt persistence: writes the per-provider error log
+/// (and timestamp) without re-serializing the whole rip_file row. Called from
+/// `phono-junk-lib::identify::identify_disc` after every fan-out completes,
+/// regardless of whether identification succeeded.
+///
+/// `errors` may be empty (all providers returned cleanly — useful for an
+/// identified disc to show "no errors" in the panel). Pass `None` to clear
+/// (e.g. on a fresh re-scan).
+pub fn set_rip_file_identify_attempt(
+    conn: &Connection,
+    rip_file_id: Id,
+    errors: Option<&[IdentifyAttemptError]>,
+    at: &str,
+) -> Result<(), DbError> {
+    let errors_json = errors.map(json_write).transpose()?;
+    conn.execute(
+        "UPDATE rip_files SET last_identify_errors = ?1, last_identify_at = ?2 WHERE id = ?3",
+        params![errors_json, at, rip_file_id],
+    )?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

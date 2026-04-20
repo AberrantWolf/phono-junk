@@ -158,6 +158,8 @@ pub fn ingest_path(
         identification_source: None,
         accuraterip_status: None,
         last_verified_at: None,
+        last_identify_errors: None,
+        last_identify_at: None,
     };
     let rip_id = cache::upsert_rip_file(conn, &rip)?;
 

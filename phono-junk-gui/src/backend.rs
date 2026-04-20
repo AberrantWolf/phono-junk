@@ -13,6 +13,7 @@
 //! 4. Send `AppMessage::OperationProgress` per item; conclude with
 //!    `LibraryChanged` + `OperationComplete`, or `OperationFailed`.
 
+pub mod detail;
 pub mod export;
 pub mod identify;
 pub mod scan;

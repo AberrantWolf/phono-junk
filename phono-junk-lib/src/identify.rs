@@ -33,15 +33,17 @@
 //! 9. Update the `RipFile` with the resolved `disc_id`, confidence,
 //!    and provider source.
 
+use chrono::Utc;
 use phono_junk_catalog::{
-    Album, Asset, AssetType as CatalogAssetType, Disagreement, Disc, Id, Release, Track,
+    Album, Asset, AssetType as CatalogAssetType, Disagreement, Disc, Id, IdentifyAttemptError,
+    Release, Track,
 };
 use phono_junk_core::{AudioError, DiscIds, IdentificationConfidence, IdentificationSource, Toc};
 use phono_junk_db::overrides::{OverrideTarget, apply as apply_override};
 use phono_junk_db::{DbError, crud};
 use phono_junk_identify::{
     AssetCandidate, AssetLookupCtx, AssetType as ProviderAssetType, DisagreementEntity,
-    IdentifyOutcome, RawDisagreement,
+    IdentifyOutcome, ProviderError, RawDisagreement,
 };
 use rusqlite::Connection;
 
@@ -110,10 +112,14 @@ impl PhonoContext {
             ids.ar_discid1,
         );
         let outcome: IdentifyOutcome = self.aggregator.identify(toc, ids, &creds);
-        let provider_errors: Vec<(String, String)> = outcome
+        let humanized_errors: Vec<IdentifyAttemptError> = outcome
             .errors
             .iter()
-            .map(|(name, e)| (name.clone(), e.to_string()))
+            .map(|(name, e)| humanize_provider_error(name, e))
+            .collect();
+        let provider_errors: Vec<(String, String)> = humanized_errors
+            .iter()
+            .map(|e| (e.provider.clone(), e.message.clone()))
             .collect();
         for (name, err) in &provider_errors {
             log::warn!("identify: provider {name} returned error: {err}");
@@ -129,6 +135,7 @@ impl PhonoContext {
             // Step 4: unidentified. Preserve TOC on the rip file; no
             // Album/Release/Disc row is created.
             mark_unidentified(conn, rip_file_id)?;
+            persist_identify_attempt(conn, rip_file_id, &humanized_errors)?;
             return Ok(IdentifiedDisc {
                 disc_id: None,
                 album_id: None,
@@ -180,15 +187,19 @@ impl PhonoContext {
         };
         let asset_outcome = self.aggregator.lookup_assets(&ctx);
         let asset_count = insert_assets(conn, release_id, &asset_outcome.candidates)?;
+        let mut humanized_errors = humanized_errors;
         let mut provider_errors = provider_errors;
-        for (name, e) in asset_outcome.errors {
-            provider_errors.push((name, e.to_string()));
+        for (name, e) in &asset_outcome.errors {
+            let h = humanize_provider_error(name, e);
+            provider_errors.push((h.provider.clone(), h.message.clone()));
+            humanized_errors.push(h);
         }
 
         // Step 9: update rip file (if present).
         if let Some(rf_id) = rip_file_id {
             update_rip_file(conn, rf_id, disc_id, source.as_ref())?;
         }
+        persist_identify_attempt(conn, rip_file_id, &humanized_errors)?;
 
         Ok(IdentifiedDisc {
             disc_id: Some(disc_id),
@@ -585,6 +596,58 @@ fn update_rip_file(
         rf.identification_source = Some(src.clone());
     }
     crud::update_rip_file(conn, &rf)
+}
+
+/// Persist the per-provider error log from the most recent identify attempt
+/// to `rip_files.last_identify_errors` + `last_identify_at`. Called on every
+/// fan-out completion (success or failure) so the GUI's detail panel can
+/// answer "why didn't this match?" without forcing a re-run.
+///
+/// `errors` may be empty (all providers succeeded); we still write the
+/// timestamp so the panel can show "Last attempted at ...". A `None`
+/// `rip_file_id` (identify-only flow with no scan-time row) is a no-op.
+fn persist_identify_attempt(
+    conn: &Connection,
+    rip_file_id: Option<Id>,
+    errors: &[IdentifyAttemptError],
+) -> Result<(), DbError> {
+    let Some(rf_id) = rip_file_id else {
+        return Ok(());
+    };
+    let now = Utc::now().to_rfc3339();
+    crud::set_rip_file_identify_attempt(conn, rf_id, Some(errors), &now)
+}
+
+/// Convert a `phono-junk-identify::ProviderError` into the persistable,
+/// user-facing form. Single boundary between the trait crate's enum and the
+/// catalog crate's storage type — nothing else (CLI, GUI, tests) should ever
+/// see `ProviderError` formatted as text.
+///
+/// Detail strings are truncated so a verbose backend response can't bloat the
+/// catalog row; the GUI shows full strings either way (text wraps, but
+/// pathological responses would still hurt list rendering).
+pub(crate) fn humanize_provider_error(
+    name: &str,
+    err: &ProviderError,
+) -> IdentifyAttemptError {
+    let message = match err {
+        ProviderError::Network(s) => format!("network error: {}", truncate(s, 80)),
+        ProviderError::Auth(_) => "authentication failed".to_string(),
+        ProviderError::RateLimited => "rate limited".to_string(),
+        ProviderError::Parse(_) => "unexpected response from provider".to_string(),
+        ProviderError::Other(s) => truncate(s, 80).to_string(),
+    };
+    IdentifyAttemptError {
+        provider: name.to_string(),
+        message,
+    }
+}
+
+fn truncate(s: &str, max: usize) -> &str {
+    match s.char_indices().nth(max) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
 }
 
 fn first_source(sources: &[String]) -> Option<IdentificationSource> {

@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, atomic::AtomicBool};
 
 use phono_junk_catalog::Id;
+use phono_junk_lib::{AlbumDetail, UnidentifiedDetail};
 
 use crate::app::PhonoApp;
 
@@ -68,6 +69,47 @@ pub enum AppMessage {
     /// Free-form status line for the toolbar — e.g. the summary of the
     /// most recent scan. Overwrites any previous status.
     Status(String),
+    /// Cover-art bytes finished downloading for `key`. Stored on
+    /// `app.detail_cache` only if the still-focused entry matches; stale
+    /// loads (user clicked elsewhere mid-fetch) are dropped.
+    DetailArtLoaded {
+        key: EntryKey,
+        bytes: Vec<u8>,
+    },
+    /// Cover-art fetch failed for `key` — surfaces inline on the detail
+    /// panel so the user sees *why* instead of egui's anonymous broken-
+    /// image placeholder.
+    DetailArtFailed {
+        key: EntryKey,
+        error: String,
+    },
+}
+
+/// In-memory cache for the currently-focused detail panel. Built lazily on
+/// first focus and invalidated on `LibraryChanged` or focus change so the
+/// view never re-runs CRUD queries every frame.
+pub struct DetailCache {
+    pub key: EntryKey,
+    pub payload: DetailPayload,
+    /// Decoded cover bytes for the currently-focused album, lazily fetched
+    /// off-thread. `None` until the worker posts `DetailArtLoaded`.
+    pub art_bytes: Option<Vec<u8>>,
+    /// Set while a fetch is in flight to avoid stacking duplicate workers
+    /// when egui repaints rapidly.
+    pub art_loading: bool,
+    /// Human-readable failure message if the most recent cover-art fetch
+    /// errored. Rendered inline under the cover block; cleared when focus
+    /// moves or a later fetch succeeds.
+    pub art_error: Option<String>,
+}
+
+#[derive(Clone)]
+pub enum DetailPayload {
+    Album(Box<AlbumDetail>),
+    Unidentified(Box<UnidentifiedDetail>),
+    /// CRUD failure mid-load. Surfaces inline so the user can see why the
+    /// panel is blank rather than getting a silent empty surface.
+    Error(String),
 }
 
 /// A background operation as tracked on `PhonoApp.operations` and drawn
@@ -136,9 +178,32 @@ pub fn handle_message(app: &mut PhonoApp, msg: AppMessage, ctx: &egui::Context) 
         }
         AppMessage::LibraryChanged => {
             app.reload_rows();
+            // The cached payload may now be stale (re-identify replaced
+            // tracks, verify wrote new AR status, scan added rip files).
+            // Drop it — the view rebuilds on next render.
+            app.detail_cache = None;
         }
         AppMessage::Status(s) => {
             app.status_message = Some(s);
+        }
+        AppMessage::DetailArtLoaded { key, bytes } => {
+            // Drop stale loads — the user may have clicked another row
+            // mid-fetch. Only writeback if the still-focused entry matches.
+            if let Some(cache) = app.detail_cache.as_mut() {
+                if cache.key == key {
+                    cache.art_bytes = Some(bytes);
+                    cache.art_loading = false;
+                    cache.art_error = None;
+                }
+            }
+        }
+        AppMessage::DetailArtFailed { key, error } => {
+            if let Some(cache) = app.detail_cache.as_mut() {
+                if cache.key == key {
+                    cache.art_loading = false;
+                    cache.art_error = Some(error);
+                }
+            }
         }
     }
     ctx.request_repaint();
@@ -246,5 +311,98 @@ mod tests {
         assert_eq!(EntryKey::Album(3).rip_file_id(), None);
         assert_eq!(EntryKey::RipFile(9).album_id(), None);
         assert_eq!(EntryKey::RipFile(9).rip_file_id(), Some(9));
+    }
+
+    fn fake_unidentified_cache(key: EntryKey) -> DetailCache {
+        DetailCache {
+            key,
+            payload: DetailPayload::Error("test".into()),
+            art_bytes: None,
+            art_loading: false,
+            art_error: None,
+        }
+    }
+
+    #[test]
+    fn library_changed_invalidates_detail_cache() {
+        let mut app = PhonoApp::new();
+        app.detail_cache = Some(fake_unidentified_cache(EntryKey::RipFile(7)));
+        let ctx = egui::Context::default();
+        handle_message(&mut app, AppMessage::LibraryChanged, &ctx);
+        assert!(app.detail_cache.is_none());
+    }
+
+    #[test]
+    fn detail_art_loaded_writes_when_focus_matches() {
+        let mut app = PhonoApp::new();
+        app.detail_cache = Some(DetailCache {
+            key: EntryKey::Album(3),
+            payload: DetailPayload::Error("placeholder".into()),
+            art_bytes: None,
+            art_loading: true,
+            art_error: None,
+        });
+        let ctx = egui::Context::default();
+        handle_message(
+            &mut app,
+            AppMessage::DetailArtLoaded {
+                key: EntryKey::Album(3),
+                bytes: vec![1, 2, 3],
+            },
+            &ctx,
+        );
+        let cache = app.detail_cache.as_ref().unwrap();
+        assert_eq!(cache.art_bytes.as_deref(), Some([1u8, 2, 3].as_slice()));
+        assert!(!cache.art_loading);
+    }
+
+    #[test]
+    fn detail_art_failed_writes_error_and_clears_loading() {
+        let mut app = PhonoApp::new();
+        app.detail_cache = Some(DetailCache {
+            key: EntryKey::Album(3),
+            payload: DetailPayload::Error("placeholder".into()),
+            art_bytes: None,
+            art_loading: true,
+            art_error: None,
+        });
+        let ctx = egui::Context::default();
+        handle_message(
+            &mut app,
+            AppMessage::DetailArtFailed {
+                key: EntryKey::Album(3),
+                error: "HTTP 404".into(),
+            },
+            &ctx,
+        );
+        let cache = app.detail_cache.as_ref().unwrap();
+        assert!(!cache.art_loading);
+        assert!(cache.art_bytes.is_none());
+        assert_eq!(cache.art_error.as_deref(), Some("HTTP 404"));
+    }
+
+    #[test]
+    fn detail_art_loaded_drops_when_focus_changed() {
+        let mut app = PhonoApp::new();
+        app.detail_cache = Some(DetailCache {
+            key: EntryKey::Album(3),
+            payload: DetailPayload::Error("placeholder".into()),
+            art_bytes: None,
+            art_loading: true,
+            art_error: None,
+        });
+        let ctx = egui::Context::default();
+        handle_message(
+            &mut app,
+            AppMessage::DetailArtLoaded {
+                key: EntryKey::Album(99),
+                bytes: vec![9, 9, 9],
+            },
+            &ctx,
+        );
+        // Stale load — bytes dropped, current cache untouched.
+        let cache = app.detail_cache.as_ref().unwrap();
+        assert!(cache.art_bytes.is_none());
+        assert!(cache.art_loading);
     }
 }

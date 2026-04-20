@@ -67,6 +67,10 @@ chrono = "0.4"
 eframe = "0.30"
 egui = "0.30"
 egui_extras = { version = "0.30", features = ["image"] }
+# `egui_extras`'s `image` feature turns on the `image` crate with no default
+# features, so no codec can actually decode bytes. Pull the crate in directly
+# with the formats we serve: JPEG + PNG + WebP (CAA, iTunes, Amazon, Discogs).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 rfd = "0.15"
 walkdir = "2"
 tempfile = "3"

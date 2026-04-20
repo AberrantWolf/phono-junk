@@ -25,7 +25,7 @@ pub enum SchemaError {
 
 /// Current schema version. Bump freely during development; there is no
 /// migration path yet, so bumping means existing dev DBs must be deleted.
-pub const CURRENT_VERSION: i32 = 2;
+pub const CURRENT_VERSION: i32 = 3;
 
 /// Open (or create) a catalog database at `path`. Sets `journal_mode=WAL`
 /// and `foreign_keys=ON`. Returns `VersionMismatch` if the DB was created
@@ -185,7 +185,9 @@ CREATE TABLE IF NOT EXISTS rip_files (
     identification_confidence   TEXT NOT NULL,
     identification_source       TEXT,
     accuraterip_status          TEXT,
-    last_verified_at            TEXT
+    last_verified_at            TEXT,
+    last_identify_errors        TEXT,
+    last_identify_at            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_rip_files_disc ON rip_files(disc_id);
 CREATE INDEX IF NOT EXISTS idx_rip_files_cue  ON rip_files(cue_path);

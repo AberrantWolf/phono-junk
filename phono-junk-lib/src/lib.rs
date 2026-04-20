@@ -9,6 +9,7 @@
 
 pub mod context;
 pub mod credentials;
+pub mod detail;
 pub mod env;
 pub mod extract;
 pub mod http;
@@ -18,7 +19,11 @@ pub mod scan;
 pub mod verify;
 
 pub use context::PhonoContext;
-pub use extract::{ExportError, ExportedDisc};
+pub use detail::{
+    AlbumDetail, DetailError, DiscDetail, ReleaseDetail, UnidentifiedDetail, load_album_detail,
+    load_unidentified_detail,
+};
+pub use extract::{ExportError, ExportedDisc, fetch_asset_bytes};
 pub use identify::{IdentifiedDisc, IdentifyError};
 pub use list::{
     ListEntry, ListFilters, ListRow, UnidentifiedRow, YearSpec, filter_entries, filter_rows,

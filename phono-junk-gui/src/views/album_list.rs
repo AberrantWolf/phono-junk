@@ -104,6 +104,27 @@ fn toolbar(ui: &mut Ui, app: &mut PhonoApp) {
             }
         }
 
+        let toggle_label = if app.detail_open {
+            "Hide details"
+        } else {
+            "Show details"
+        };
+        if ui.button(toggle_label).clicked() {
+            app.detail_open = !app.detail_open;
+        }
+
+        // Reset enables whenever we know *which* file we tried to open,
+        // even if the open itself failed — that's the whole point after
+        // a schema bump: the existing DB is unreadable and needs to go.
+        let has_path = app.db_path.is_some();
+        if ui
+            .add_enabled(has_path, egui::Button::new("Reset DB..."))
+            .on_hover_text("Delete and recreate the catalog database. Use after a schema bump.")
+            .clicked()
+        {
+            confirm_reset_database(app);
+        }
+
         ui.separator();
 
         let album_ids: Vec<_> = app.selected.iter().filter_map(|k| k.album_id()).collect();
@@ -150,37 +171,51 @@ fn toolbar(ui: &mut Ui, app: &mut PhonoApp) {
             }
         }
 
-        ui.separator();
-        if let Some(path) = &app.db_path {
-            ui.label(RichText::new(path.display().to_string()).weak());
-        }
-        let unid = app.unidentified_count();
-        if unid > 0 {
-            ui.label(
-                RichText::new(format!("{unid} unidentified"))
-                    .color(egui::Color32::LIGHT_YELLOW),
-            );
-        }
-        if let Some(err) = &app.load_error {
-            ui.colored_label(egui::Color32::LIGHT_RED, err);
-        }
-        if let Some(status) = &app.status_message {
-            ui.label(RichText::new(status).weak());
-        }
     });
+    // db path / unidentified count / load error / status message render
+    // in the bottom status bar (see `app::update`) so they don't fall off
+    // the right edge of a crowded toolbar.
+}
+
+/// Pre-release convenience: nuke the open DB and recreate it from the
+/// current schema. Always confirmed via a blocking `rfd::MessageDialog`
+/// because it deletes user state. Per the no-migrations policy, dev DBs
+/// are ephemeral; this avoids a `rm` from the terminal every time
+/// `CURRENT_VERSION` bumps.
+fn confirm_reset_database(app: &mut PhonoApp) {
+    let Some(path) = app.db_path.clone() else {
+        app.load_error = Some("reset: no database is open".into());
+        return;
+    };
+    let res = rfd::MessageDialog::new()
+        .set_title("Reset catalog database?")
+        .set_description(format!(
+            "This deletes ALL catalog data at:\n\n{}\n\nThe file (and its WAL sidecars) will be \
+             removed and recreated empty. You'll need to scan again to repopulate. Continue?",
+            path.display(),
+        ))
+        .set_buttons(rfd::MessageButtons::OkCancel)
+        .set_level(rfd::MessageLevel::Warning)
+        .show();
+    if matches!(res, rfd::MessageDialogResult::Ok) {
+        app.reset_database();
+    }
 }
 
 fn open_db(app: &mut PhonoApp, path: std::path::PathBuf) {
+    // Always set db_path so the Reset DB button is reachable even when the
+    // open fails (schema mismatch / corrupt file).
+    app.db_path = Some(path.clone());
+    app.selected.clear();
+    app.selection_anchor = None;
     match phono_junk_db::open_database(&path) {
         Ok(conn) => {
-            app.db_path = Some(path);
             app.db_conn = Some(conn);
             app.load_error = None;
-            app.selected.clear();
-            app.selection_anchor = None;
             app.reload_rows();
         }
         Err(e) => {
+            app.db_conn = None;
             app.load_error = Some(format!("open database: {e}"));
         }
     }
@@ -458,6 +493,15 @@ fn apply_click(
     app.selected.clear();
     app.selected.insert(key);
     app.selection_anchor = Some(key);
+    // Plain click also drives the detail panel: focus this row, drop any
+    // stale cache, and auto-open the panel on first selection so users
+    // browsing the table see album detail without having to discover the
+    // toolbar toggle.
+    if app.focused_entry != Some(key) {
+        app.focused_entry = Some(key);
+        app.detail_cache = None;
+    }
+    app.detail_open = true;
 }
 
 fn row_context_menu(ui: &mut Ui, app: &mut PhonoApp) {

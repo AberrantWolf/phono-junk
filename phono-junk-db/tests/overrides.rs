@@ -209,6 +209,8 @@ fn rip_file_accuraterip_status() {
         identification_source: None,
         accuraterip_status: None,
         last_verified_at: None,
+        last_identify_errors: None,
+        last_identify_at: None,
     };
     apply_override(
         OverrideTarget::RipFile(&mut f),
