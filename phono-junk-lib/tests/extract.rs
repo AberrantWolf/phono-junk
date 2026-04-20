@@ -14,7 +14,7 @@ use claxon::FlacReader;
 use junk_libs_disc::layout::LEAD_IN_FRAMES;
 use metaflac::{Tag, block::Block, block::PictureType};
 use phono_junk_catalog::{Album, Asset, AssetType, Disc, Release, RipFile, Track};
-use phono_junk_core::{IdentificationConfidence, IdentificationSource, Toc};
+use phono_junk_core::{IdentificationConfidence, IdentificationSource, IdentificationState, Toc};
 use phono_junk_db::{crud, open_memory};
 use phono_junk_lib::PhonoContext;
 use rusqlite::Connection;
@@ -98,6 +98,7 @@ fn sample_disc(release_id: i64, toc: Toc) -> Disc {
         ar_discid1: Some("00000001".into()),
         ar_discid2: Some("00000002".into()),
         dbar_raw: None,
+        mcn: None,
     }
 }
 
@@ -130,6 +131,9 @@ fn sample_rip_file(disc_id: i64, cue: &Path, bin: &Path) -> RipFile {
         last_verified_at: None,
         last_identify_errors: None,
         last_identify_at: None,
+        provenance: None,
+        identification_state: IdentificationState::Identified,
+        last_state_change_at: None,
     }
 }
 

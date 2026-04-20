@@ -1,0 +1,28 @@
+{
+  "pagination": {
+    "page": 1,
+    "pages": 1,
+    "per_page": 50,
+    "items": 1,
+    "urls": {}
+  },
+  "results": [
+    {
+      "id": 999001,
+      "type": "release",
+      "master_id": 111222,
+      "title": "Test Artist - Test Album",
+      "year": 1996,
+      "country": "US",
+      "label": ["Test Label"],
+      "catno": "TEST-001",
+      "barcode": ["0123456789012"],
+      "format": ["CD", "Album"],
+      "genre": ["Electronic"],
+      "style": ["Ambient"],
+      "cover_image": "https://i.discogs.com/example/cover.jpg",
+      "thumb": "https://i.discogs.com/example/thumb.jpg",
+      "resource_url": "https://api.discogs.com/releases/999001"
+    }
+  ]
+}

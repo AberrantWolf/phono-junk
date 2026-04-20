@@ -7,6 +7,7 @@
 //! Credentials + rate-limited HTTP client live here for day 1; extracted to
 //! `junk-libs` once retro-junk is ready to consume them.
 
+pub mod audit;
 pub mod context;
 pub mod credentials;
 pub mod detail;
@@ -16,6 +17,7 @@ pub mod http;
 pub mod identify;
 pub mod list;
 pub mod scan;
+pub mod sidecar;
 pub mod verify;
 
 pub use context::PhonoContext;

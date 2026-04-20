@@ -60,6 +60,7 @@
 
 use egui::{RichText, TextEdit, Ui};
 use egui_extras::{Column, TableBuilder};
+use phono_junk_core::IdentificationState;
 use phono_junk_lib::list::{ListEntry, ListRow, UnidentifiedRow, YearSpec, filter_entries};
 
 use crate::app::PhonoApp;
@@ -96,7 +97,11 @@ fn toolbar(ui: &mut Ui, app: &mut PhonoApp) {
         }
 
         if ui
-            .add_enabled(has_db, egui::Button::new("Scan folder..."))
+            .add_enabled(has_db, egui::Button::new("Add folder..."))
+            .on_hover_text(
+                "Pick a folder of rips. Registered as a tracked library root so the app \
+                 auto-rescans it on every open.",
+            )
             .clicked()
         {
             if let Some(root) = rfd::FileDialog::new().pick_folder() {
@@ -123,6 +128,28 @@ fn toolbar(ui: &mut Ui, app: &mut PhonoApp) {
             .clicked()
         {
             confirm_reset_database(app);
+        }
+
+        ui.separator();
+
+        // Settings modal + Discogs status indicator. Indicator doubles as
+        // a clickable shortcut — users who see "Discogs: off" next to a
+        // failed barcode identify can jump straight into the dialog.
+        if ui.button("Settings...").clicked() {
+            app.settings_open = true;
+        }
+        let discogs_on = app.phono_ctx.credentials.has("discogs");
+        let (label, color) = if discogs_on {
+            ("Discogs: on", egui::Color32::LIGHT_GREEN)
+        } else {
+            ("Discogs: off", egui::Color32::GRAY)
+        };
+        if ui
+            .small_button(RichText::new(label).color(color))
+            .on_hover_text("Click to configure Discogs credentials")
+            .clicked()
+        {
+            app.settings_open = true;
         }
 
         ui.separator();
@@ -213,6 +240,7 @@ fn open_db(app: &mut PhonoApp, path: std::path::PathBuf) {
             app.db_conn = Some(conn);
             app.load_error = None;
             app.reload_rows();
+            app.rescan_tracked_folders();
         }
         Err(e) => {
             app.db_conn = None;
@@ -265,6 +293,10 @@ fn filter_bar(ui: &mut Ui, app: &mut PhonoApp) {
         ui.checkbox(
             &mut app.list_filters.include_unidentified,
             "Show unidentified",
+        );
+        ui.checkbox(
+            &mut app.list_filters.missing_redumper_only,
+            "Missing redumper provenance",
         );
     });
 }
@@ -326,6 +358,17 @@ fn table(ui: &mut Ui, app: &mut PhonoApp) {
 
     let entries: Vec<ListEntry> = filter_entries(app.list_entries.clone(), &app.list_filters);
 
+    // Working rows need ~10Hz repaint so the spinner animates without
+    // idle CPU burn when nothing is in flight. `request_repaint_after`
+    // is cumulative — multiple calls collapse to the earliest.
+    if entries.iter().any(|e| matches!(
+        e,
+        ListEntry::Unidentified(u) if u.state == IdentificationState::Working
+    )) {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(100));
+    }
+
     // Labels inside cells otherwise swallow clicks for text selection,
     // which blocks the row's own click handler. Cells inherit this
     // parent style into their child UIs.
@@ -335,6 +378,7 @@ fn table(ui: &mut Ui, app: &mut PhonoApp) {
         .striped(true)
         .resizable(true)
         .sense(egui::Sense::click())
+        .column(Column::initial(32.0))                   // Status icon
         .column(Column::initial(240.0).at_least(120.0)) // Title
         .column(Column::initial(160.0).at_least(80.0))  // Artist
         .column(Column::initial(60.0))                  // Year
@@ -345,7 +389,7 @@ fn table(ui: &mut Ui, app: &mut PhonoApp) {
         .column(Column::initial(70.0))                  // Releases
         .header(20.0, |mut header| {
             for heading in [
-                "Title", "Artist", "Year", "Country", "Lang", "Label", "Discs", "Releases",
+                "", "Title", "Artist", "Year", "Country", "Lang", "Label", "Discs", "Releases",
             ] {
                 header.col(|ui| {
                     ui.label(RichText::new(heading).family(egui::FontFamily::Name(
@@ -360,6 +404,7 @@ fn table(ui: &mut Ui, app: &mut PhonoApp) {
                 let selected = app.selected.contains(&key);
                 body.row(18.0, |mut tr| {
                     tr.set_selected(selected);
+                    status_cell(&mut tr, entry);
                     match entry {
                         ListEntry::Album(row) => album_cells(&mut tr, row),
                         ListEntry::Unidentified(row) => unidentified_cells(&mut tr, row),
@@ -369,6 +414,61 @@ fn table(ui: &mut Ui, app: &mut PhonoApp) {
                 });
             }
         });
+}
+
+/// Leading Status column — icon and tooltip per lifecycle state. Identified
+/// albums always render `✓`; unidentified rows' icon tracks the `state`
+/// field on `UnidentifiedRow` so Queued / Working / Failed are all visually
+/// distinct.
+fn status_cell(tr: &mut egui_extras::TableRow<'_, '_>, entry: &ListEntry) {
+    tr.col(|ui| {
+        match entry {
+            ListEntry::Album(_) => {
+                ui.label(
+                    RichText::new("✓")
+                        .color(egui::Color32::from_rgb(110, 190, 110))
+                        .strong(),
+                )
+                .on_hover_text("Identified");
+            }
+            ListEntry::Unidentified(row) => match row.state {
+                IdentificationState::Unscanned => {
+                    ui.label(RichText::new("—").weak())
+                        .on_hover_text("Not scanned");
+                }
+                IdentificationState::Queued => {
+                    ui.label(RichText::new("…").weak())
+                        .on_hover_text("Queued for identification");
+                }
+                IdentificationState::Working => {
+                    ui.add(egui::Spinner::new().size(14.0))
+                        .on_hover_text("Identifying…");
+                }
+                IdentificationState::Identified => {
+                    // Shouldn't happen in the Unidentified arm, but render
+                    // defensively rather than panic.
+                    ui.label(
+                        RichText::new("✓")
+                            .color(egui::Color32::from_rgb(110, 190, 110)),
+                    );
+                }
+                IdentificationState::Unidentified => {
+                    ui.label(
+                        RichText::new("⚠")
+                            .color(egui::Color32::from_rgb(220, 180, 80)),
+                    )
+                    .on_hover_text("No provider returned a match");
+                }
+                IdentificationState::Failed => {
+                    ui.label(
+                        RichText::new("✕")
+                            .color(egui::Color32::from_rgb(220, 100, 100)),
+                    )
+                    .on_hover_text("Identify attempt failed — try again");
+                }
+            },
+        }
+    });
 }
 
 fn album_cells(tr: &mut egui_extras::TableRow<'_, '_>, row: &ListRow) {

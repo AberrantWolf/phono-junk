@@ -25,7 +25,7 @@ pub enum SchemaError {
 
 /// Current schema version. Bump freely during development; there is no
 /// migration path yet, so bumping means existing dev DBs must be deleted.
-pub const CURRENT_VERSION: i32 = 3;
+pub const CURRENT_VERSION: i32 = 6;
 
 /// Open (or create) a catalog database at `path`. Sets `journal_mode=WAL`
 /// and `foreign_keys=ON`. Returns `VersionMismatch` if the DB was created
@@ -148,7 +148,10 @@ CREATE TABLE IF NOT EXISTS discs (
     cddb_id         TEXT,
     ar_discid1      TEXT,
     ar_discid2      TEXT,
-    dbar_raw        BLOB
+    dbar_raw        BLOB,
+    -- Media Catalog Number from the disc's subchannel Q data
+    -- (a physical-disc fact; releases.barcode is the metadata-DB fact).
+    mcn             TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_discs_release   ON discs(release_id);
 CREATE INDEX IF NOT EXISTS idx_discs_mb_discid ON discs(mb_discid);
@@ -187,11 +190,31 @@ CREATE TABLE IF NOT EXISTS rip_files (
     accuraterip_status          TEXT,
     last_verified_at            TEXT,
     last_identify_errors        TEXT,
-    last_identify_at            TEXT
+    last_identify_at            TEXT,
+    -- Sprint 26: lifecycle state separate from confidence. One of
+    -- unscanned / queued / working / identified / unidentified / failed.
+    identification_state        TEXT NOT NULL DEFAULT 'unscanned',
+    last_state_change_at        TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_rip_files_disc ON rip_files(disc_id);
-CREATE INDEX IF NOT EXISTS idx_rip_files_cue  ON rip_files(cue_path);
-CREATE INDEX IF NOT EXISTS idx_rip_files_chd  ON rip_files(chd_path);
+CREATE INDEX IF NOT EXISTS idx_rip_files_disc  ON rip_files(disc_id);
+CREATE INDEX IF NOT EXISTS idx_rip_files_cue   ON rip_files(cue_path);
+CREATE INDEX IF NOT EXISTS idx_rip_files_chd   ON rip_files(chd_path);
+CREATE INDEX IF NOT EXISTS idx_rip_files_state ON rip_files(identification_state);
+
+-- Ripper provenance as a 1:1 side-table: keeps the rip_files row lean for the
+-- common "pre-redumper rip" case, and leaves room for provenance to grow
+-- (C2 error counts, secure-mode details, per-track stats) without another
+-- ALTER. `ripper` is Ripper::as_str() (e.g. 'redumper', 'eac', 'unknown').
+CREATE TABLE IF NOT EXISTS rip_file_provenance (
+    rip_file_id     INTEGER PRIMARY KEY REFERENCES rip_files(id) ON DELETE CASCADE,
+    ripper          TEXT NOT NULL,
+    version         TEXT,
+    drive_json      TEXT,
+    read_offset     INTEGER,
+    log_path        TEXT NOT NULL,
+    rip_date        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rip_file_provenance_ripper ON rip_file_provenance(ripper);
 
 CREATE TABLE IF NOT EXISTS assets (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -220,6 +243,17 @@ CREATE TABLE IF NOT EXISTS disagreements (
 );
 CREATE INDEX IF NOT EXISTS idx_disagreements_entity     ON disagreements(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_disagreements_unresolved ON disagreements(resolved) WHERE resolved = 0;
+
+-- Library folders tracked for auto-rescan. "Adding a folder" via the GUI
+-- registers it here so every future DB open re-walks the tree — new rips
+-- appear in the album list without requiring the user to click through a
+-- dialog every time. `path` is the absolute on-disk path (UTF-8 only;
+-- non-UTF-8 paths are rejected at insert time). Sprint 27.
+CREATE TABLE IF NOT EXISTS library_folders (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    path            TEXT NOT NULL UNIQUE,
+    added_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 CREATE TABLE IF NOT EXISTS overrides (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,

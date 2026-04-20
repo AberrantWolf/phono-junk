@@ -40,8 +40,8 @@ use std::path::Path;
 
 use egui::{Color32, RichText, Ui};
 use egui_extras::{Column, TableBuilder};
-use phono_junk_catalog::{Asset, Disagreement, IdentifyAttemptError, Track};
-use phono_junk_lib::{AlbumDetail, DiscDetail, ReleaseDetail, UnidentifiedDetail};
+use phono_junk_catalog::{Asset, Disagreement, IdentifyAttemptError, RipperProvenance, Track};
+use phono_junk_lib::{AlbumDetail, DiscDetail, ReleaseDetail, UnidentifiedDetail, audit};
 
 use crate::app::PhonoApp;
 use crate::backend;
@@ -315,6 +315,9 @@ fn disc_block(ui: &mut Ui, disc: &DiscDetail, total_discs: u8) {
             } else {
                 ui.label(RichText::new("AccurateRip: not yet verified").weak());
             }
+            if let Some(prov) = rf.provenance.as_ref() {
+                provenance_block(ui, prov);
+            }
             // File path
             if let Some(p) = rf.cue_path.as_ref() {
                 path_row(ui, "CUE", p);
@@ -478,9 +481,25 @@ fn render_unidentified(ui: &mut Ui, app: &mut PhonoApp, detail: &UnidentifiedDet
             meta_row(ui, "Size", Some(&format_bytes(size)));
         }
 
+        // Ripper provenance (redumper / EAC / ...) — rendered here for the
+        // unidentified path, exactly the same as in disc_block. Sidecar data
+        // that isn't yet attached to a Disc row shows in the next section.
+        if let Some(prov) = detail.rip_file.provenance.as_ref() {
+            ui.add_space(4.0);
+            provenance_block(ui, prov);
+        }
+
+        // Sidecar facts (MCN, CD-TEXT UPC, per-track ISRCs) re-collected on
+        // focus. None of this persists for unidentified rips — MCN/ISRCs
+        // live on Disc/Track which don't exist yet — so re-reading is the
+        // only way to surface them in the panel.
+        sidecar_block(ui, &detail.sidecar);
+
         ui.separator();
 
-        // TOC preview
+        // TOC preview — merges CD-TEXT per-track titles/performers into
+        // the rows when present so a foreign-language disc that no provider
+        // matched still renders its real song titles.
         match (detail.toc.as_ref(), detail.toc_error.as_deref()) {
             (Some(toc), _) => {
                 ui.label(RichText::new("Table of contents").strong());
@@ -492,7 +511,7 @@ fn render_unidentified(ui: &mut Ui, app: &mut PhonoApp, detail: &UnidentifiedDet
                     if count == 1 { "" } else { "s" },
                     format_length(Some(total)),
                 ));
-                toc_table(ui, toc);
+                toc_table(ui, toc, &detail.sidecar);
             }
             (None, Some(err)) => {
                 ui.colored_label(Color32::LIGHT_RED, format!("TOC unavailable: {err}"));
@@ -541,17 +560,39 @@ fn render_unidentified(ui: &mut Ui, app: &mut PhonoApp, detail: &UnidentifiedDet
     });
 }
 
-fn toc_table(ui: &mut Ui, toc: &phono_junk_core::Toc) {
+fn toc_table(ui: &mut Ui, toc: &phono_junk_core::Toc, sidecar: &phono_junk_lib::sidecar::SidecarData) {
+    let any_title = !sidecar.cdtext_titles.is_empty();
+    let any_performer = !sidecar.cdtext_performers.is_empty();
     TableBuilder::new(ui)
         .id_salt("toc_preview")
         .striped(true)
-        .column(Column::initial(36.0))   // #
-        .column(Column::initial(80.0))   // Length
-        .column(Column::initial(100.0))  // Start LBA
+        .column(Column::initial(36.0))                        // #
+        .column(Column::initial(80.0))                        // Length
+        .column(Column::initial(100.0))                       // Start LBA
+        .column(if any_title {
+            Column::remainder().at_least(120.0)               // CD-TEXT title
+        } else {
+            Column::exact(0.0)
+        })
+        .column(if any_performer {
+            Column::initial(120.0).at_least(60.0)             // CD-TEXT performer
+        } else {
+            Column::exact(0.0)
+        })
         .header(18.0, |mut h| {
             h.col(|ui| { ui.label("#"); });
             h.col(|ui| { ui.label("Length"); });
             h.col(|ui| { ui.label("Start"); });
+            if any_title {
+                h.col(|ui| { ui.label("Title (CD-TEXT)"); });
+            } else {
+                h.col(|_ui| {});
+            }
+            if any_performer {
+                h.col(|ui| { ui.label("Performer"); });
+            } else {
+                h.col(|_ui| {});
+            }
         })
         .body(|mut body| {
             for (i, &start) in toc.track_offsets.iter().enumerate() {
@@ -572,9 +613,67 @@ fn toc_table(ui: &mut Ui, toc: &phono_junk_core::Toc) {
                     tr.col(|ui| {
                         ui.label(start.to_string());
                     });
+                    if any_title {
+                        tr.col(|ui| {
+                            let pos = track_number as u8;
+                            let t = sidecar.cdtext_titles.get(&pos).cloned().unwrap_or_default();
+                            ui.label(t);
+                        });
+                    } else {
+                        tr.col(|_ui| {});
+                    }
+                    if any_performer {
+                        tr.col(|ui| {
+                            let pos = track_number as u8;
+                            let p = sidecar
+                                .cdtext_performers
+                                .get(&pos)
+                                .cloned()
+                                .unwrap_or_default();
+                            ui.label(p);
+                        });
+                    } else {
+                        tr.col(|_ui| {});
+                    }
                 });
             }
         });
+}
+
+/// Render MCN / CD-TEXT UPC / per-track ISRC facts pulled from sibling
+/// sidecars. Only shown when something is populated — an empty sidecar
+/// silently renders nothing, same as `provenance_block` above.
+fn sidecar_block(ui: &mut Ui, data: &phono_junk_lib::sidecar::SidecarData) {
+    if data.is_empty() {
+        return;
+    }
+    // Provenance is rendered separately via `provenance_block`. If that's
+    // all we have here, skip — no need for an empty "From sidecar" header.
+    let has_catalog_facts = data.mcn.is_some()
+        || data.cdtext_upc.is_some()
+        || !data.isrcs.is_empty();
+    if !has_catalog_facts {
+        return;
+    }
+    ui.add_space(4.0);
+    ui.label(RichText::new("From sidecar").strong());
+    meta_row(ui, "MCN", data.mcn.as_deref());
+    meta_row(ui, "CD-TEXT UPC/EAN", data.cdtext_upc.as_deref());
+    if !data.isrcs.is_empty() {
+        let id = ui.make_persistent_id("sidecar_isrcs");
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
+            .show_header(ui, |ui| {
+                ui.label(RichText::new(format!("ISRCs ({})", data.isrcs.len())).weak());
+            })
+            .body(|ui| {
+                for (pos, code) in &data.isrcs {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("#{pos:02}")).monospace().weak());
+                        ui.label(RichText::new(code).monospace());
+                    });
+                }
+            });
+    }
 }
 
 fn toc_total_frames(toc: &phono_junk_core::Toc) -> u64 {
@@ -608,6 +707,74 @@ fn meta_row(ui: &mut Ui, label: &str, value: Option<&str>) {
         ui.label(RichText::new(format!("{label}:")).weak());
         ui.label(v);
     });
+}
+
+/// Render the rip's provenance — ripper + drive + offset + date + log path.
+///
+/// A compact vertical block mounted in `disc_block` between the AR-status
+/// line and the file-path rows. Only called when `rf.provenance.is_some()`,
+/// so absence of a sidecar never clutters the panel.
+///
+/// When the sidecar was present but unrecognised ([`Ripper::Unknown`]), we
+/// still render a single "Ripper: Unknown" line plus the log path — the
+/// user deserves to know a log was found even if we can't parse it, but we
+/// don't print "unknown (log present, unrecognised)" or similar judgy
+/// phrasing.
+fn provenance_block(ui: &mut Ui, prov: &RipperProvenance) {
+    use junk_libs_disc::redumper::Ripper;
+
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Ripper:").weak());
+        let label = match prov.ripper {
+            Ripper::Redumper => match prov.version.as_deref() {
+                Some(v) => format!("redumper {v}"),
+                None => "redumper".to_string(),
+            },
+            Ripper::Unknown => "Unknown".to_string(),
+            _ => audit::ripper_label(Some(prov.ripper)).to_string(),
+        };
+        ui.label(label);
+    });
+
+    if let Some(drive) = prov.drive.as_ref() {
+        let parts: Vec<&str> = [drive.vendor.as_str(), drive.product.as_str()]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect();
+        let drive_text = if parts.is_empty() {
+            None
+        } else {
+            let mut s = parts.join(" ");
+            if let Some(fw) = drive.firmware.as_deref() {
+                s.push_str(&format!(" (fw {fw})"));
+            }
+            Some(s)
+        };
+        if let Some(text) = drive_text {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Drive:").weak());
+                ui.label(text);
+            });
+        }
+    }
+
+    if let Some(offset) = prov.read_offset {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Offset:").weak());
+            let sign = if offset >= 0 { "+" } else { "" };
+            ui.label(format!("{sign}{offset} samples"));
+        });
+    }
+
+    if let Some(date) = prov.rip_date {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Ripped:").weak());
+            ui.label(date.format("%Y-%m-%d %H:%M UTC").to_string());
+        });
+    }
+
+    path_row(ui, "Log", &prov.log_path);
 }
 
 fn path_row(ui: &mut Ui, label: &str, path: &Path) {

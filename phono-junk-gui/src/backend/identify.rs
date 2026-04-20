@@ -16,7 +16,6 @@ use std::sync::atomic::Ordering;
 use phono_junk_catalog::Id;
 use phono_junk_core::DiscIds;
 use phono_junk_db::{crud, open_database};
-use phono_junk_lib::scan::{ScanOpts, ingest_path};
 
 use crate::app::PhonoApp;
 use crate::backend::{resolve_disc_ids_for_albums, worker::spawn_background_op};
@@ -98,13 +97,21 @@ fn reidentify_one(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let disc = crud::get_disc(conn, disc_id)?.ok_or("disc vanished")?;
     let toc = disc.toc.clone().ok_or("disc has no persisted TOC")?;
+    // Carry barcode + catalog_number into the re-identify pass so Discogs
+    // (and any other identifier-keyed provider) actually gets dispatched.
+    // MCN on `Disc` was populated by Sprint 22's sidecar enrichment; the
+    // catalog_number lives on the release. Previously these were hardcoded
+    // to `None` and every re-identify silently skipped Discogs.
+    let barcode = disc.mcn.clone();
+    let catalog_number = crud::get_release(conn, disc.release_id)?
+        .and_then(|r| r.catalog_number);
     let ids = DiscIds {
         mb_discid: disc.mb_discid.clone(),
         cddb_id: disc.cddb_id.clone(),
         ar_discid1: disc.ar_discid1.clone(),
         ar_discid2: disc.ar_discid2.clone(),
-        barcode: None,
-        catalog_number: None,
+        barcode,
+        catalog_number,
     };
     let rip = crud::find_rip_file_for_disc(conn, disc_id)?;
     let rip_id = rip.map(|r| r.id);
@@ -112,80 +119,28 @@ fn reidentify_one(
     Ok(())
 }
 
+/// Push every selected rip-file id onto the shared identify queue so the
+/// serialized worker drains them one at a time — respects provider rate
+/// limits and keeps the "Identify (N)" button consistent with the scan
+/// dispatcher's auto-queueing path.
 pub fn spawn_identify_unidentified(app: &mut PhonoApp, rip_file_ids: Vec<Id>) {
     let Some(db_path) = app.db_path.clone() else {
         app.load_error = Some("identify: open a catalog database first".into());
         return;
     };
+    if rip_file_ids.is_empty() {
+        return;
+    }
     let phono_ctx = app.phono_ctx.clone();
-    let n = rip_file_ids.len();
-    let description = format!("Identifying {n} rip file{}", if n == 1 { "" } else { "s" });
-
-    spawn_background_op(app, description, move |op_id, cancel, tx| {
-        let conn = match open_database(&db_path) {
-            Ok(c) => c,
-            Err(e) => {
-                let _ = tx.send(AppMessage::OperationFailed {
-                    op_id,
-                    error: format!("identify: open database: {e}"),
-                });
-                return;
-            }
-        };
-
-        let total = rip_file_ids.len() as u64;
-        let mut failures = 0usize;
-        let opts = ScanOpts::default();
-        for (i, rf_id) in rip_file_ids.iter().enumerate() {
-            if cancel.load(Ordering::Relaxed) {
-                break;
-            }
-            let rip = match crud::get_rip_file(&conn, *rf_id) {
-                Ok(Some(r)) => r,
-                Ok(None) => {
-                    log::warn!("identify: rip_file {rf_id} vanished");
-                    failures += 1;
-                    continue;
-                }
-                Err(e) => {
-                    log::warn!("identify: rip_file {rf_id} load: {e}");
-                    failures += 1;
-                    continue;
-                }
-            };
-            let Some(path) = rip.cue_path.clone().or_else(|| rip.chd_path.clone()) else {
-                log::warn!("identify: rip_file {rf_id} has no path");
-                failures += 1;
-                continue;
-            };
-            let note = path.display().to_string();
-            let _ = tx.send(AppMessage::OperationProgress {
-                op_id,
-                current: i as u64,
-                total,
-                note: Some(note),
-            });
-
-            if let Err(e) = ingest_path(&phono_ctx, &conn, &path, &opts) {
-                failures += 1;
-                log::warn!("identify rip_file {rf_id} ({}): {e}", path.display());
-            }
-        }
-        let _ = tx.send(AppMessage::OperationProgress {
-            op_id,
-            current: total,
-            total,
-            note: None,
-        });
-
-        let _ = tx.send(AppMessage::LibraryChanged);
-        if failures > 0 {
-            let _ = tx.send(AppMessage::OperationFailed {
-                op_id,
-                error: format!("identify finished with {failures} failure(s); see log"),
-            });
-        } else {
-            let _ = tx.send(AppMessage::OperationComplete { op_id });
-        }
-    });
+    for id in rip_file_ids {
+        crate::backend::identify_queue::enqueue_for_identify(
+            app.message_tx.clone(),
+            phono_ctx.clone(),
+            db_path.clone(),
+            id,
+        );
+    }
+    // No explicit activity-bar registration — the queue announces itself
+    // via `AppMessage::OperationStarted` on its first idle→active
+    // transition, and `handle_message` adds the entry.
 }

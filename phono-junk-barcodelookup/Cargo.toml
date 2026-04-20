@@ -1,5 +1,5 @@
 [package]
-name = "phono-junk-discogs"
+name = "phono-junk-barcodelookup"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

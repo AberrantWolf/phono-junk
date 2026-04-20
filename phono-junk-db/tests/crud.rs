@@ -1,9 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use phono_junk_catalog::{
     Album, Asset, AssetType, Disagreement, Disc, Override, Release, RipFile, Track,
 };
-use phono_junk_core::{IdentificationConfidence, IdentificationSource, Toc};
+use phono_junk_core::{IdentificationConfidence, IdentificationSource, IdentificationState, Toc};
 use phono_junk_db::{cache, crud, open_memory};
 
 fn sample_album() -> Album {
@@ -53,6 +53,7 @@ fn sample_disc(release_id: i64) -> Disc {
         ar_discid1: Some("00112233".into()),
         ar_discid2: Some("44556677".into()),
         dbar_raw: None,
+        mcn: None,
     }
 }
 
@@ -71,6 +72,14 @@ fn sample_track(disc_id: i64, position: u8) -> Track {
 }
 
 fn sample_rip_file(disc_id: Option<i64>) -> RipFile {
+    // State tracks whether this sample represents an identified rip or an
+    // unmatched one — tests assert against both branches of
+    // `list_unidentified_rip_files`, so the two must stay consistent.
+    let state = if disc_id.is_some() {
+        IdentificationState::Identified
+    } else {
+        IdentificationState::Unidentified
+    };
     RipFile {
         id: 0,
         disc_id,
@@ -88,6 +97,9 @@ fn sample_rip_file(disc_id: Option<i64>) -> RipFile {
             message: "no match found".into(),
         }]),
         last_identify_at: Some("2026-04-19T00:05:00Z".into()),
+        provenance: None,
+        identification_state: state,
+        last_state_change_at: Some("2026-04-19T00:05:00Z".into()),
     }
 }
 
@@ -381,4 +393,190 @@ fn end_to_end_identify_flow() {
     .unwrap();
     assert!(hit.is_some());
     assert_eq!(hit.unwrap().id, rip_id);
+}
+
+#[test]
+fn disc_mcn_round_trips() {
+    let conn = open_memory().unwrap();
+    let album_id = crud::insert_album(&conn, &sample_album()).unwrap();
+    let release_id = crud::insert_release(&conn, &sample_release(album_id)).unwrap();
+    let mut disc = sample_disc(release_id);
+    disc.mcn = Some("0727361234567".into());
+    let id = crud::insert_disc(&conn, &disc).unwrap();
+
+    let got = crud::get_disc(&conn, id).unwrap().unwrap();
+    assert_eq!(got.mcn.as_deref(), Some("0727361234567"));
+
+    // Update path: clearing MCN round-trips to NULL.
+    let mut mutated = got;
+    mutated.mcn = None;
+    crud::update_disc(&conn, &mutated).unwrap();
+    let reloaded = crud::get_disc(&conn, id).unwrap().unwrap();
+    assert!(reloaded.mcn.is_none());
+}
+
+#[test]
+fn rip_file_provenance_round_trips() {
+    use chrono::TimeZone;
+    use junk_libs_disc::redumper::{DriveInfo, Ripper};
+    use phono_junk_catalog::RipperProvenance;
+
+    let conn = open_memory().unwrap();
+    let album_id = crud::insert_album(&conn, &sample_album()).unwrap();
+    let release_id = crud::insert_release(&conn, &sample_release(album_id)).unwrap();
+    let disc_id = crud::insert_disc(&conn, &sample_disc(release_id)).unwrap();
+
+    let prov = RipperProvenance {
+        ripper: Ripper::Redumper,
+        version: Some("v2024.03.01 build_1".into()),
+        drive: Some(DriveInfo {
+            vendor: "ASUS".into(),
+            product: "BW-16D1HT".into(),
+            firmware: Some("3.00".into()),
+        }),
+        read_offset: Some(6),
+        log_path: PathBuf::from("/rips/album.log"),
+        rip_date: Some(chrono::Utc.with_ymd_and_hms(2024, 1, 15, 14, 23, 45).unwrap()),
+    };
+
+    let mut rip = sample_rip_file(Some(disc_id));
+    rip.provenance = Some(prov.clone());
+    let id = crud::insert_rip_file(&conn, &rip).unwrap();
+
+    let got = crud::get_rip_file(&conn, id).unwrap().unwrap();
+    assert_eq!(got.provenance.as_ref(), Some(&prov));
+
+    // Update with a different ripper clears+rewrites.
+    let mut mutated = got;
+    mutated.provenance = Some(RipperProvenance {
+        ripper: Ripper::Unknown,
+        log_path: PathBuf::from("/rips/album.log"),
+        version: None,
+        drive: None,
+        read_offset: None,
+        rip_date: None,
+    });
+    crud::update_rip_file(&conn, &mutated).unwrap();
+    let reloaded = crud::get_rip_file(&conn, id).unwrap().unwrap();
+    assert_eq!(
+        reloaded.provenance.as_ref().map(|p| p.ripper),
+        Some(Ripper::Unknown)
+    );
+    assert!(reloaded.provenance.as_ref().unwrap().drive.is_none());
+
+    // Clearing provenance deletes the side-table row.
+    let mut cleared = reloaded;
+    cleared.provenance = None;
+    crud::update_rip_file(&conn, &cleared).unwrap();
+    let final_load = crud::get_rip_file(&conn, id).unwrap().unwrap();
+    assert!(final_load.provenance.is_none());
+}
+
+#[test]
+fn identification_state_round_trips_and_targeted_update_works() {
+    // Sprint 26: `identification_state` + `last_state_change_at` persist
+    // end-to-end. `set_rip_file_identification_state` is a targeted
+    // update that doesn't require re-loading/re-writing the whole row.
+    let conn = open_memory().unwrap();
+    let id = crud::insert_rip_file(&conn, &sample_rip_file(None)).unwrap();
+
+    let loaded = crud::get_rip_file(&conn, id).unwrap().unwrap();
+    assert_eq!(loaded.identification_state, IdentificationState::Unidentified);
+
+    crud::set_rip_file_identification_state(
+        &conn,
+        id,
+        IdentificationState::Working,
+        "2026-04-20T12:00:00Z",
+    )
+    .unwrap();
+    let reloaded = crud::get_rip_file(&conn, id).unwrap().unwrap();
+    assert_eq!(reloaded.identification_state, IdentificationState::Working);
+    assert_eq!(
+        reloaded.last_state_change_at.as_deref(),
+        Some("2026-04-20T12:00:00Z")
+    );
+}
+
+#[test]
+fn list_rip_files_by_state_filters_correctly() {
+    let conn = open_memory().unwrap();
+    // Three rows, three states.
+    for (i, state) in [
+        IdentificationState::Queued,
+        IdentificationState::Working,
+        IdentificationState::Identified,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut r = sample_rip_file(None);
+        r.cue_path = Some(PathBuf::from(format!("/tmp/rip_{i}.cue")));
+        r.identification_state = state;
+        crud::insert_rip_file(&conn, &r).unwrap();
+    }
+    let queued = crud::list_rip_files_by_state(&conn, &[IdentificationState::Queued]).unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].identification_state, IdentificationState::Queued);
+
+    let non_identified = crud::list_rip_files_by_state(
+        &conn,
+        &[IdentificationState::Queued, IdentificationState::Working],
+    )
+    .unwrap();
+    assert_eq!(non_identified.len(), 2);
+}
+
+#[test]
+fn library_folders_insert_is_idempotent_and_list_returns_rows() {
+    let conn = open_memory().unwrap();
+    let a = crud::insert_library_folder(&conn, Path::new("/rips/one")).unwrap();
+    let b = crud::insert_library_folder(&conn, Path::new("/rips/two")).unwrap();
+    assert_ne!(a, b);
+
+    // Re-adding the same path returns the same id; no duplicate row.
+    let a_again = crud::insert_library_folder(&conn, Path::new("/rips/one")).unwrap();
+    assert_eq!(a, a_again);
+    let folders = crud::list_library_folders(&conn).unwrap();
+    assert_eq!(folders.len(), 2);
+    assert_eq!(folders[0].path, PathBuf::from("/rips/one"));
+    assert_eq!(folders[1].path, PathBuf::from("/rips/two"));
+    assert!(folders[0].added_at.is_some());
+
+    crud::delete_library_folder(&conn, a).unwrap();
+    let after = crud::list_library_folders(&conn).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].path, PathBuf::from("/rips/two"));
+}
+
+#[test]
+fn list_unidentified_rip_files_includes_every_non_identified_state() {
+    // `list_unidentified_rip_files` now returns rows across the full
+    // set of pre-Identified states so the GUI's "unidentified" list
+    // is the visible complement of the identified albums.
+    let conn = open_memory().unwrap();
+    for (i, state) in [
+        IdentificationState::Unscanned,
+        IdentificationState::Queued,
+        IdentificationState::Working,
+        IdentificationState::Unidentified,
+        IdentificationState::Failed,
+        IdentificationState::Identified,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut r = sample_rip_file(None);
+        r.cue_path = Some(PathBuf::from(format!("/tmp/rip_{i}.cue")));
+        r.identification_state = state;
+        crud::insert_rip_file(&conn, &r).unwrap();
+    }
+    let listed = crud::list_unidentified_rip_files(&conn).unwrap();
+    // Every state except Identified should be visible → 5 rows.
+    assert_eq!(listed.len(), 5);
+    assert!(
+        !listed
+            .iter()
+            .any(|r| r.identification_state == IdentificationState::Identified)
+    );
 }

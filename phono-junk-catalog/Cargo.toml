@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 phono-junk-core.workspace = true
+junk-libs-disc.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_yml.workspace = true
 chrono = { workspace = true, features = ["serde"] }

@@ -1,5 +1,5 @@
 use phono_junk_catalog::{Album, Disc, Override, Release, RipFile, Track};
-use phono_junk_core::IdentificationConfidence;
+use phono_junk_core::{IdentificationConfidence, IdentificationState};
 use phono_junk_db::overrides::{OverrideError, OverrideTarget, apply, apply_override, parse_sub_path};
 
 fn album() -> Album {
@@ -28,6 +28,7 @@ fn disc_with_tracks(n: u8) -> (Disc, Vec<Track>) {
         ar_discid1: None,
         ar_discid2: None,
         dbar_raw: None,
+        mcn: None,
     };
     let tracks = (1..=n)
         .map(|pos| Track {
@@ -211,6 +212,9 @@ fn rip_file_accuraterip_status() {
         last_verified_at: None,
         last_identify_errors: None,
         last_identify_at: None,
+        provenance: None,
+        identification_state: IdentificationState::Unscanned,
+        last_state_change_at: None,
     };
     apply_override(
         OverrideTarget::RipFile(&mut f),

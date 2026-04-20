@@ -18,6 +18,15 @@ pub use consensus::{DisagreementEntity, MergedDisc, RawDisagreement, merge};
 pub use fanout::{identify_parallel, lookup_assets_parallel, spawn_all};
 pub use http::{HttpClient, HttpClientBuilder, HttpError, HttpResponse};
 
+/// Re-exports of the header types used by [`HttpClient::get_with_headers`].
+/// Provider crates construct headers through this module so they don't
+/// need to declare their own `reqwest` dependency.
+pub mod header {
+    pub use reqwest::header::{
+        AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue,
+    };
+}
+
 use phono_junk_core::{AudioError, DiscIds, Toc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -61,7 +70,9 @@ pub enum AssetConfidence {
 /// Providers that don't need auth (MusicBrainz, Cover Art Archive, iTunes)
 /// ignore this. Providers that do (Discogs, Amazon PA-API) pull their
 /// token out by name.
-#[derive(Debug, Clone, Default)]
+///
+/// Never leaks via `Debug` — the custom impl emits provider names only.
+#[derive(Clone, Default)]
 pub struct Credentials {
     entries: std::collections::HashMap<String, String>,
 }
@@ -76,6 +87,19 @@ impl Credentials {
     pub fn get(&self, provider: &str) -> Option<&str> {
         self.entries.get(provider).map(String::as_str)
     }
+    pub fn has(&self, provider: &str) -> bool {
+        self.entries.contains_key(provider)
+    }
+}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut keys: Vec<&str> = self.entries.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        f.debug_struct("Credentials")
+            .field("providers", &keys)
+            .finish()
+    }
 }
 
 /// Errors from provider lookups.
@@ -89,6 +113,11 @@ pub enum ProviderError {
     RateLimited,
     #[error("Parse error: {0}")]
     Parse(String),
+    /// No credential registered for this provider. Fan-out collects this
+    /// as a per-provider error so the GUI's detail panel can show a
+    /// "no token — open Settings" row instead of failing the identify call.
+    #[error("missing credential: {0}")]
+    MissingCredential(&'static str),
     #[error("Other: {0}")]
     Other(String),
 }

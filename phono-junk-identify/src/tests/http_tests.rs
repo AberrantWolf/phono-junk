@@ -135,6 +135,33 @@ fn per_host_buckets_are_independent() {
 }
 
 #[test]
+fn get_with_headers_adds_custom_headers_alongside_user_agent() {
+    use reqwest::header::{HeaderName, HeaderValue};
+
+    let server = MockServer::start();
+    let ua = "phono-junk-test/0.1";
+    let mock = server.mock(|when, then| {
+        when.method(GET)
+            .path("/auth")
+            .header("user-agent", ua)
+            .header("authorization", "Discogs token=hunter2");
+        then.status(200).body("ok");
+    });
+
+    let client = HttpClient::builder().user_agent(ua).build().unwrap();
+    let headers = [(
+        HeaderName::from_static("authorization"),
+        HeaderValue::from_static("Discogs token=hunter2"),
+    )];
+    let resp = client
+        .get_with_headers(&server.url("/auth"), &headers)
+        .unwrap();
+
+    assert_eq!(resp.status, 200);
+    mock.assert();
+}
+
+#[test]
 fn unregistered_host_passes_through_without_limiting() {
     let server = MockServer::start();
     let mock = server.mock(|when, then| {

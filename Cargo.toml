@@ -8,6 +8,7 @@ members = [
     "phono-junk-discogs",
     "phono-junk-itunes",
     "phono-junk-amazon",
+    "phono-junk-barcodelookup",
     "phono-junk-accuraterip",
     "phono-junk-catalog",
     "phono-junk-db",
@@ -37,6 +38,7 @@ phono-junk-musicbrainz = { path = "phono-junk-musicbrainz" }
 phono-junk-discogs = { path = "phono-junk-discogs" }
 phono-junk-itunes = { path = "phono-junk-itunes" }
 phono-junk-amazon = { path = "phono-junk-amazon" }
+phono-junk-barcodelookup = { path = "phono-junk-barcodelookup" }
 phono-junk-accuraterip = { path = "phono-junk-accuraterip" }
 phono-junk-catalog = { path = "phono-junk-catalog" }
 phono-junk-db = { path = "phono-junk-db" }
@@ -64,6 +66,9 @@ httpmock = "0.7"
 rusqlite = { version = "0.33", features = ["bundled"] }
 dirs = "6"
 chrono = "0.4"
+keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+rpassword = "7"
+zeroize = "1"
 eframe = "0.30"
 egui = "0.30"
 egui_extras = { version = "0.30", features = ["image"] }

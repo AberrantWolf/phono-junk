@@ -1,0 +1,40 @@
+{
+  "products": [
+    {
+      "barcode_number": "0123456789012",
+      "barcode_formats": "UPC-A 012345678901, EAN-13 0123456789012",
+      "mpn": "TEST-001",
+      "model": "",
+      "asin": "",
+      "title": "Test Album",
+      "category": "Media > Music > CDs",
+      "manufacturer": "Test Label",
+      "brand": "Test Label",
+      "contributors": [],
+      "age_group": "",
+      "ingredients": "",
+      "nutrition_facts": "",
+      "energy_efficiency_class": "",
+      "color": "",
+      "gender": "",
+      "material": "",
+      "pattern": "",
+      "format": "",
+      "multipack": "",
+      "size": "",
+      "length": "",
+      "width": "",
+      "height": "",
+      "weight": "",
+      "release_date": "1996-05-03",
+      "description": "A synthetic fixture modelled on barcodelookup.com's /v3/products envelope.",
+      "features": [],
+      "images": [
+        "https://images.barcodelookup.com/example/front.jpg",
+        "https://images.barcodelookup.com/example/back.jpg"
+      ],
+      "stores": [],
+      "reviews": []
+    }
+  ]
+}

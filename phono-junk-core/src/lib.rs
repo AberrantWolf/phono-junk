@@ -73,6 +73,57 @@ pub enum IdentificationConfidence {
     Unidentified,
 }
 
+/// Where a rip file sits in the scan/identify lifecycle.
+///
+/// Distinct from [`IdentificationConfidence`]: confidence answers "how
+/// trustworthy is the match?", state answers "has identification run yet?".
+/// `Unscanned` is only seen transiently during ingest; persisted rows are
+/// always one of the other four.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum IdentificationState {
+    /// Row exists but no identify attempt has been run. Used briefly during
+    /// metadata-only ingest before the queue picks the row up.
+    #[default]
+    Unscanned,
+    /// Sitting in the identify queue, waiting for a worker.
+    Queued,
+    /// An identify worker is currently running providers for this rip.
+    Working,
+    /// Identification succeeded — `disc_id` is set.
+    Identified,
+    /// Providers ran but none returned a match. Distinct from `Queued`:
+    /// "tried and failed to match" vs "hasn't tried yet".
+    Unidentified,
+    /// Identify attempt aborted with a hard error (bad TOC, DB error, not
+    /// a provider no-match). Retrying clears the state back to `Queued`.
+    Failed,
+}
+
+impl IdentificationState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IdentificationState::Unscanned => "unscanned",
+            IdentificationState::Queued => "queued",
+            IdentificationState::Working => "working",
+            IdentificationState::Identified => "identified",
+            IdentificationState::Unidentified => "unidentified",
+            IdentificationState::Failed => "failed",
+        }
+    }
+
+    pub fn from_str_db(s: &str) -> Option<Self> {
+        Some(match s {
+            "unscanned" => IdentificationState::Unscanned,
+            "queued" => IdentificationState::Queued,
+            "working" => IdentificationState::Working,
+            "identified" => IdentificationState::Identified,
+            "unidentified" => IdentificationState::Unidentified,
+            "failed" => IdentificationState::Failed,
+            _ => return None,
+        })
+    }
+}
+
 /// Where an identification came from.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum IdentificationSource {
@@ -82,6 +133,10 @@ pub enum IdentificationSource {
     Amazon,
     UserTagged,
     Import,
+    /// A redumper sidecar (log or CD-TEXT) read off the local filesystem.
+    /// Used for physical-disc facts like MCN and per-track ISRCs mirrored
+    /// out of the rip's `.log` / `.cdtext`.
+    Redumper,
     /// Another provider, named by the provider's `name()`.
     Other(String),
 }

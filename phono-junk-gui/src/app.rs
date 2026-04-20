@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc;
 
+use phono_junk_db::crud;
 use phono_junk_lib::PhonoContext;
 use phono_junk_lib::env::{default_db_path, default_user_agent};
 use phono_junk_lib::list::{ListEntry, ListFilters, load_list_entries};
@@ -65,6 +66,13 @@ pub struct PhonoApp {
     /// `update` frame via [`handle_message`].
     pub message_rx: mpsc::Receiver<AppMessage>,
     pub message_tx: mpsc::Sender<AppMessage>,
+
+    /// Whether the Settings modal is currently shown.
+    pub settings_open: bool,
+    /// Draft state for the Settings modal (token input buffers + last
+    /// save/clear status). Separate from `phono_ctx.credentials` so the
+    /// user can type without committing until they press Save.
+    pub settings: crate::views::settings::SettingsState,
 }
 
 impl PhonoApp {
@@ -95,6 +103,8 @@ impl PhonoApp {
             detail_cache: None,
             message_rx: rx,
             message_tx: tx,
+            settings_open: false,
+            settings: crate::views::settings::SettingsState::default(),
         }
     }
 
@@ -133,6 +143,7 @@ impl PhonoApp {
             Ok(conn) => {
                 self.db_conn = Some(conn);
                 self.reload_rows();
+                self.rescan_tracked_folders();
             }
             Err(e) => {
                 self.load_error = Some(format!("open default library: {e}"));
@@ -191,6 +202,38 @@ impl PhonoApp {
         }
     }
 
+    /// Kick a background scan for every tracked library folder. Called
+    /// after the DB opens successfully (default or user-picked), so a
+    /// user who added folders in a previous session sees fresh rips
+    /// without having to click "Add folder…" again.
+    ///
+    /// Folders whose on-disk location has disappeared (moved/unmounted
+    /// drive) surface as operation-failure messages and stay in the
+    /// `library_folders` table — the user can remove them explicitly
+    /// later. We deliberately don't purge on one failed scan.
+    pub fn rescan_tracked_folders(&mut self) {
+        let Some(conn) = self.db_conn.as_ref() else {
+            return;
+        };
+        let folders = match crud::list_library_folders(conn) {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("auto-rescan: list_library_folders: {e}");
+                return;
+            }
+        };
+        for folder in folders {
+            if !folder.path.is_dir() {
+                log::warn!(
+                    "auto-rescan: tracked folder missing on disk: {}",
+                    folder.path.display()
+                );
+                continue;
+            }
+            crate::backend::scan::spawn_scan(self, folder.path);
+        }
+    }
+
     /// Reload `list_entries` from the open DB, if any. Called after a
     /// background op posts [`AppMessage::LibraryChanged`] and from the
     /// "Refresh" toolbar button. Prunes stale selection keys.
@@ -239,7 +282,7 @@ impl Default for PhonoApp {
 mod tests {
     use super::*;
     use phono_junk_catalog::{Album, RipFile};
-    use phono_junk_core::IdentificationConfidence;
+    use phono_junk_core::{IdentificationConfidence, IdentificationState};
     use phono_junk_db::{crud, open_memory};
 
     fn insert_album(conn: &rusqlite::Connection, title: &str) -> phono_junk_catalog::Id {
@@ -280,6 +323,9 @@ mod tests {
                 last_verified_at: None,
                 last_identify_errors: None,
                 last_identify_at: None,
+                provenance: None,
+                identification_state: IdentificationState::Unidentified,
+                last_state_change_at: None,
             },
         )
         .unwrap()
@@ -316,11 +362,15 @@ mod tests {
                 rip_file_id: 1,
                 cue_path: Some("/tmp/a.cue".into()),
                 chd_path: None,
+                ripper: None,
+                state: IdentificationState::Unidentified,
             }),
             ListEntry::Unidentified(phono_junk_lib::list::UnidentifiedRow {
                 rip_file_id: 2,
                 cue_path: Some("/tmp/b.cue".into()),
                 chd_path: None,
+                ripper: None,
+                state: IdentificationState::Unidentified,
             }),
         ];
         assert_eq!(app.unidentified_count(), 2);
@@ -359,5 +409,7 @@ impl eframe::App for PhonoApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             views::album_list::show(ui, self);
         });
+
+        views::settings::show(ctx, self);
     }
 }

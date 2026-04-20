@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 use phono_junk_catalog::{Album, Disc, Id, Release, RipFile, Track};
-use phono_junk_core::{IdentificationConfidence, Toc};
+use phono_junk_core::{IdentificationConfidence, IdentificationState, Toc};
 use phono_junk_db::{crud, open_database};
 use predicates::prelude::*;
 use tempfile::TempDir;
@@ -73,7 +73,64 @@ fn help_lists_every_subcommand() {
         .success()
         .stdout(predicate::str::contains("scan").and(predicate::str::contains("identify")))
         .stdout(predicate::str::contains("verify").and(predicate::str::contains("export")))
-        .stdout(predicate::str::contains("list"));
+        .stdout(predicate::str::contains("list"))
+        .stdout(predicate::str::contains("credentials"));
+}
+
+#[test]
+fn credentials_list_on_empty_store_is_benign() {
+    // New DB path → no catalog state; no keyring entries expected either
+    // (even if the host has a keyring, `phono-junk`/`discogs` won't be
+    // populated in a fresh test env). The command must exit 0 with a
+    // graceful empty-list message.
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("library.db");
+    phono()
+        .args([
+            "--db",
+            db_path.to_str().unwrap(),
+            "credentials",
+            "list",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn scan_leaves_queued_state_when_identify_skipped_flag_is_off() {
+    // Sprint 26: default `scan` (no flags) metadata-ingests every file
+    // without triggering provider calls (the test infrastructure has no
+    // network access), so rows should land in `Queued` state. The
+    // subsequent `identify --queued` call then attempts to drain them;
+    // without a network it transitions queued → failed, and the state
+    // stays visible via `list --unidentified`.
+    let tmp = TempDir::new().unwrap();
+    let rips_dir = tmp.path().join("rips");
+    std::fs::create_dir_all(&rips_dir).unwrap();
+    stage_arver_fixture(&rips_dir);
+    let db_path = tmp.path().join("library.db");
+
+    // scan --no-identify → state should be Unscanned (user opted out).
+    phono()
+        .args([
+            "--db",
+            db_path.to_str().unwrap(),
+            "scan",
+            rips_dir.to_str().unwrap(),
+            "--no-identify",
+        ])
+        .assert()
+        .success();
+
+    let conn = open_database(&db_path).unwrap();
+    let rips = crud::list_unidentified_rip_files(&conn).unwrap();
+    assert_eq!(rips.len(), 1);
+    assert_eq!(
+        rips[0].identification_state,
+        IdentificationState::Unscanned,
+        "--no-identify leaves rows as Unscanned, not Queued"
+    );
+    drop(conn);
 }
 
 #[test]
@@ -294,6 +351,7 @@ fn seed_one_disc(db_path: &Path) -> (Id, Id, Id) {
             ar_discid1: None,
             ar_discid2: None,
             dbar_raw: None,
+            mcn: None,
         },
     )
     .unwrap();
@@ -328,6 +386,9 @@ fn seed_one_disc(db_path: &Path) -> (Id, Id, Id) {
             last_verified_at: None,
             last_identify_errors: None,
             last_identify_at: None,
+            provenance: None,
+            identification_state: IdentificationState::Identified,
+            last_state_change_at: None,
         },
     )
     .unwrap();

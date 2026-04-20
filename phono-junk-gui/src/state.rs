@@ -44,6 +44,16 @@ impl EntryKey {
 
 #[derive(Debug)]
 pub enum AppMessage {
+    /// A background operation that wasn't spawned via
+    /// [`crate::backend::worker::spawn_background_op`] announces itself so
+    /// the activity bar can render its progress. Used by the identify
+    /// queue's bursty lifecycle where the worker outlives any individual
+    /// burst — each burst gets its own op_id + activity-bar entry.
+    OperationStarted {
+        op_id: OperationId,
+        description: String,
+        cancel_token: Arc<AtomicBool>,
+    },
     /// Worker pushed a progress tick for an in-flight operation.
     ///
     /// `total == 0` means "indeterminate" — the activity bar draws a
@@ -157,6 +167,16 @@ pub fn next_operation_id() -> OperationId {
 /// while the window is idle still cause a redraw.
 pub fn handle_message(app: &mut PhonoApp, msg: AppMessage, ctx: &egui::Context) {
     match msg {
+        AppMessage::OperationStarted {
+            op_id,
+            description,
+            cancel_token,
+        } => {
+            if !app.operations.iter().any(|o| o.id == op_id) {
+                app.operations
+                    .push(BackgroundOperation::new(op_id, description, cancel_token));
+            }
+        }
         AppMessage::OperationProgress {
             op_id,
             current,

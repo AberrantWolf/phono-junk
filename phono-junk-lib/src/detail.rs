@@ -25,6 +25,8 @@ use phono_junk_db::{DbError, crud};
 use phono_junk_toc::{read_toc_from_chd, read_toc_from_cue};
 use rusqlite::Connection;
 
+use crate::sidecar::{self, SidecarData};
+
 /// Entire album subtree as the detail panel needs to render it.
 #[derive(Debug, Clone)]
 pub struct AlbumDetail {
@@ -109,7 +111,13 @@ pub fn load_album_detail(conn: &Connection, album_id: Id) -> Result<AlbumDetail,
 
 /// Detail payload for an unidentified rip — the rip file row (which carries
 /// the persisted `last_identify_errors` + `last_identify_at` fields) plus an
-/// on-the-fly TOC re-parse.
+/// on-the-fly TOC re-parse and a fresh sidecar collection.
+///
+/// Sidecar data (MCN, ISRCs, CD-TEXT titles/performers) is transient for
+/// unidentified rips — only `RipFile.provenance` persists; the rest lives on
+/// `Disc.mcn` / `Track.isrc` which don't exist until identify succeeds.
+/// Re-collecting here lets the panel surface it anyway, especially useful for
+/// foreign-language discs where CD-TEXT titles are the only readable metadata.
 #[derive(Debug, Clone)]
 pub struct UnidentifiedDetail {
     pub rip_file: RipFile,
@@ -118,6 +126,10 @@ pub struct UnidentifiedDetail {
     /// was moved or deleted after the scan. Renders inline in the panel so
     /// the user can act on it instead of seeing a silent blank.
     pub toc_error: Option<String>,
+    /// Sidecar artefacts re-collected from the CUE's neighbouring files
+    /// (redumper `.log`, `.cdtext`). Empty for CHD-only rips and when no
+    /// sidecars exist next to the CUE.
+    pub sidecar: SidecarData,
 }
 
 /// Re-parse the on-disk TOC from `rip_file`'s CUE or CHD so the panel can
@@ -136,10 +148,17 @@ pub fn load_unidentified_detail(rip_file: RipFile) -> UnidentifiedDetail {
         ),
         Err(e) => (None, Some(e)),
     };
+    // Sidecars only attach to CUE-based rips (CHD has no sibling log/cdtext
+    // in its container today). Mirrors the scan pipeline's policy.
+    let sidecar = match rip_file.cue_path.as_deref() {
+        Some(cue) => sidecar::collect_redumper_sidecars(cue),
+        None => SidecarData::default(),
+    };
     UnidentifiedDetail {
         rip_file,
         toc,
         toc_error,
+        sidecar,
     }
 }
 
@@ -165,7 +184,7 @@ where
 mod tests {
     use super::*;
     use phono_junk_catalog::IdentifyAttemptError;
-    use phono_junk_core::IdentificationConfidence;
+    use phono_junk_core::{IdentificationConfidence, IdentificationState};
     use std::path::PathBuf;
 
     fn rip(cue: Option<&str>, chd: Option<&str>) -> RipFile {
@@ -186,6 +205,9 @@ mod tests {
                 message: "no match found".into(),
             }]),
             last_identify_at: Some("2026-04-20T12:00:00Z".into()),
+            provenance: None,
+            identification_state: IdentificationState::Unidentified,
+            last_state_change_at: Some("2026-04-20T12:00:00Z".into()),
         }
     }
 
@@ -204,5 +226,52 @@ mod tests {
         assert!(d.toc.is_none());
         let msg = d.toc_error.unwrap();
         assert!(msg.contains("/no/such/path.cue"));
+    }
+
+    #[test]
+    fn unidentified_detail_collects_sibling_redumper_log() {
+        // Smoke test: dropping a minimally-shaped redumper log next to a CUE
+        // surfaces provenance on `UnidentifiedDetail.sidecar` without any
+        // scan pipeline involvement. Verifies Bug 1 — the detail panel no
+        // longer needs persistence to show sidecar-derived facts.
+        let tmp = tempfile::tempdir().unwrap();
+        let cue_path = tmp.path().join("foo.cue");
+        std::fs::write(
+            &cue_path,
+            b"FILE \"foo.bin\" BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+        let log_path = tmp.path().join("foo.log");
+        std::fs::write(
+            &log_path,
+            b"redumper v2024.03.01 build_1\n\nMCN: 0123456789012\n",
+        )
+        .unwrap();
+
+        let mut r = rip(Some(cue_path.to_str().unwrap()), None);
+        r.cue_path = Some(cue_path.clone());
+        let d = load_unidentified_detail(r);
+
+        assert!(d.sidecar.provenance.is_some());
+        assert_eq!(
+            d.sidecar.mcn.as_deref(),
+            Some("0123456789012"),
+            "MCN line should be parsed from the log",
+        );
+    }
+
+    #[test]
+    fn unidentified_detail_no_sidecar_yields_empty_sidecar_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cue_path = tmp.path().join("bare.cue");
+        std::fs::write(
+            &cue_path,
+            b"FILE \"bare.bin\" BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+        let mut r = rip(Some(cue_path.to_str().unwrap()), None);
+        r.cue_path = Some(cue_path.clone());
+        let d = load_unidentified_detail(r);
+        assert!(d.sidecar.is_empty());
     }
 }

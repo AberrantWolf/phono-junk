@@ -59,11 +59,22 @@ enum Command {
         #[arg(long)]
         no_identify: bool,
     },
-    /// Identify a single disc from its cue or chd.
+    /// Identify a single disc from its cue or chd, or drain the queue.
+    ///
+    /// Default: run identify against one cue/chd path (the legacy mode).
+    /// With `--queued`, walk every `rip_files` row in `Queued` or `Failed`
+    /// state and run identify on each serially. Used after a `scan
+    /// --no-identify` pass, or to retry rows that hit transient provider
+    /// errors.
     Identify {
-        path: PathBuf,
+        /// Path to the CUE/CHD to identify. Omit when using `--queued`.
+        path: Option<PathBuf>,
         #[arg(long)]
         force_refresh: bool,
+        /// Drain every row in Queued or Failed state instead of identifying
+        /// one specific file. Mutually exclusive with `path`.
+        #[arg(long, conflicts_with = "path")]
+        queued: bool,
     },
     /// Verify a disc against AccurateRip.
     Verify {
@@ -81,6 +92,27 @@ enum Command {
         out: PathBuf,
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Audit the library by ripper provenance.
+    ///
+    /// Default: print a count per ripper variant. With `--missing-redumper`,
+    /// list every rip that isn't sourced from redumper (including rips with
+    /// no sidecar at all) — useful when hunting re-rip candidates.
+    Audit {
+        /// Show only rips lacking confirmed redumper provenance.
+        #[arg(long)]
+        missing_redumper: bool,
+    },
+    /// Manage provider credentials stored in the OS keyring.
+    ///
+    /// Reads and writes happen against `service=phono-junk, user=<provider>`.
+    /// `PHONO_DISCOGS_TOKEN` env var, if set, overrides the keyring value
+    /// at runtime but is NOT written to the keyring. Env vars are readable
+    /// by any same-uid process, may land in crash dumps, and appear in
+    /// shell history if set inline — for daily use prefer `credentials set`.
+    Credentials {
+        #[command(subcommand)]
+        action: CredentialsAction,
     },
     /// List cataloged albums.
     List {
@@ -100,6 +132,23 @@ enum Command {
         #[arg(long)]
         unidentified: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum CredentialsAction {
+    /// Store a token for a provider. Prompts for the token on stdin
+    /// with no-echo — never pass tokens as CLI args (shell history leak).
+    Set {
+        /// Provider name (e.g. `discogs`).
+        provider: String,
+    },
+    /// Remove a provider's token from the keyring and in-memory store.
+    Clear {
+        provider: String,
+    },
+    /// List provider names that currently have a token stored. Values
+    /// are never printed.
+    List,
 }
 
 fn main() -> ExitCode {
@@ -135,13 +184,16 @@ fn dispatch(cli: &Cli) -> Result<ExitCode, CliError> {
         Command::Identify {
             path,
             force_refresh,
-        } => run_identify(cli, fmt, path, *force_refresh),
+            queued,
+        } => run_identify(cli, fmt, path.as_deref(), *force_refresh, *queued),
         Command::Verify { path, disc_id } => run_verify(cli, fmt, path.as_deref(), *disc_id),
         Command::Export {
             disc_ids,
             out,
             dry_run,
         } => run_export(cli, fmt, disc_ids, out, *dry_run),
+        Command::Audit { missing_redumper } => run_audit(cli, fmt, *missing_redumper),
+        Command::Credentials { action } => run_credentials(fmt, action),
         Command::List {
             artist,
             year,
@@ -192,6 +244,17 @@ fn print_scan_event(ev: &ScanEvent<'_>) {
         }
         ScanEvent::CacheHit { path, rip_file_id } => {
             log::info!("cache hit (rip_file={rip_file_id}): {}", path.display());
+        }
+        ScanEvent::Ingested {
+            path,
+            rip_file_id,
+            state,
+        } => {
+            log::info!(
+                "metadata ingested (rip_file={rip_file_id}, state={}): {}",
+                state.as_str(),
+                path.display(),
+            );
         }
         ScanEvent::Identified { path, result } => {
             if result.identified {
@@ -255,13 +318,22 @@ struct IdentifyOutput {
 fn run_identify(
     cli: &Cli,
     fmt: OutputFormat,
-    path: &Path,
+    path: Option<&Path>,
     force_refresh: bool,
+    queued: bool,
 ) -> Result<ExitCode, CliError> {
+    let CliEnv { conn, ctx, .. } = open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
+
+    if queued {
+        return run_identify_queued(&conn, &ctx, fmt, force_refresh);
+    }
+
+    let path = path.ok_or_else(|| {
+        CliError::InvalidArg("`identify` requires <path> or --queued".into())
+    })?;
     if !path.exists() {
         return Err(CliError::MissingPath(path.to_path_buf()));
     }
-    let CliEnv { conn, ctx, .. } = open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
     let opts = ScanOpts {
         force_refresh,
         identify: true,
@@ -272,6 +344,54 @@ fn run_identify(
         log::warn!("provider {name}: {msg}");
     }
     emit(fmt, &output, format_identify_output)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+#[derive(serde::Serialize)]
+struct QueueDrainSummary {
+    processed: usize,
+    identified: usize,
+    unidentified: usize,
+    failed: usize,
+}
+
+fn run_identify_queued(
+    conn: &rusqlite::Connection,
+    ctx: &PhonoContext,
+    fmt: OutputFormat,
+    force_refresh: bool,
+) -> Result<ExitCode, CliError> {
+    use phono_junk_core::IdentificationState;
+    let queue = crud::list_rip_files_by_state(
+        conn,
+        &[IdentificationState::Queued, IdentificationState::Failed],
+    )?;
+    let total = queue.len();
+    let mut identified = 0usize;
+    let mut unidentified = 0usize;
+    let mut failed = 0usize;
+    for rip in queue {
+        match phono_junk_lib::scan::identify_one(ctx, conn, rip.id, force_refresh) {
+            Ok(disc) if disc.identified => identified += 1,
+            Ok(_) => unidentified += 1,
+            Err(e) => {
+                failed += 1;
+                log::warn!("identify queue rip_file={}: {e}", rip.id);
+            }
+        }
+    }
+    let summary = QueueDrainSummary {
+        processed: total,
+        identified,
+        unidentified,
+        failed,
+    };
+    emit(fmt, &summary, |s| {
+        format!(
+            "Queue drained: {} processed ({} identified, {} unidentified, {} failed).",
+            s.processed, s.identified, s.unidentified, s.failed
+        )
+    })?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -558,6 +678,168 @@ fn format_export_output(o: &ExportOutput) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// audit
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct AuditMissingRow {
+    rip_file_id: i64,
+    disc_id: Option<i64>,
+    path: Option<String>,
+    ripper: &'static str,
+    log_path: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct AuditSummaryOutput {
+    total: usize,
+    redumper: usize,
+    non_redumper: usize,
+    by_ripper: Vec<(String, usize)>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum AuditOutput {
+    MissingRedumper(Vec<AuditMissingRow>),
+    Summary(AuditSummaryOutput),
+}
+
+fn run_audit(cli: &Cli, fmt: OutputFormat, missing_redumper: bool) -> Result<ExitCode, CliError> {
+    use phono_junk_lib::audit;
+
+    let CliEnv { conn, .. } = open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, false)?;
+    let output = if missing_redumper {
+        let rows = audit::list_missing_redumper(&conn)?
+            .into_iter()
+            .map(|r| AuditMissingRow {
+                rip_file_id: r.rip_file_id,
+                disc_id: r.disc_id,
+                path: r
+                    .cue_path
+                    .or(r.chd_path)
+                    .map(|p| p.display().to_string()),
+                ripper: audit::ripper_label(r.ripper),
+                log_path: r.log_path.map(|p| p.display().to_string()),
+            })
+            .collect();
+        AuditOutput::MissingRedumper(rows)
+    } else {
+        let s = audit::summarize(&conn)?;
+        AuditOutput::Summary(AuditSummaryOutput {
+            total: s.total,
+            redumper: s.redumper_count(),
+            non_redumper: s.non_redumper_count(),
+            by_ripper: s
+                .by_ripper
+                .iter()
+                .map(|(r, n)| (audit::ripper_label(*r).to_string(), *n))
+                .collect(),
+        })
+    };
+    emit(fmt, &output, format_audit_output)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn format_audit_output(o: &AuditOutput) -> String {
+    match o {
+        AuditOutput::MissingRedumper(rows) => {
+            if rows.is_empty() {
+                return "(no rips lacking redumper provenance)".into();
+            }
+            let mut lines = vec![format!(
+                "{:>4} {:<40} {:<20} path",
+                "id", "ripper", "log"
+            )];
+            for r in rows {
+                lines.push(format!(
+                    "{:>4} {:<40.40} {:<20.20} {}",
+                    r.rip_file_id,
+                    r.ripper,
+                    r.log_path.as_deref().unwrap_or("(none)"),
+                    r.path.as_deref().unwrap_or("(no path)"),
+                ));
+            }
+            lines.join("\n")
+        }
+        AuditOutput::Summary(s) => {
+            let mut lines = vec![format!(
+                "{} rips total: {} redumper, {} non-redumper",
+                s.total, s.redumper, s.non_redumper
+            )];
+            for (label, n) in &s.by_ripper {
+                lines.push(format!("  {n:>4}  {label}"));
+            }
+            lines.join("\n")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// credentials
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct CredentialsListOutput {
+    providers: Vec<String>,
+}
+
+fn run_credentials(fmt: OutputFormat, action: &CredentialsAction) -> Result<ExitCode, CliError> {
+    use phono_junk_lib::credentials::CredentialStore;
+
+    // The credentials subcommand doesn't need a DB or provider set, just
+    // a credential store loaded from the keyring.
+    let store = CredentialStore::new();
+    if let Err(e) = store.load_from_keyring() {
+        log::warn!("credentials: {e}");
+    }
+
+    match action {
+        CredentialsAction::Set { provider } => {
+            let token = rpassword::prompt_password(format!("Enter token for {provider}: "))
+                .map_err(|e| CliError::InvalidArg(format!("read token: {e}")))?;
+            let token = token.trim();
+            if token.is_empty() {
+                return Err(CliError::InvalidArg("empty token".into()));
+            }
+            store
+                .store_to_keyring(provider, token)
+                .map_err(|e| CliError::InvalidArg(format!("keyring: {e}")))?;
+            // Logs stay quiet on success — token length isn't sensitive but
+            // silence is the better default for an interactive credential
+            // write. The user pressed Enter; that's their confirmation.
+            emit(fmt, &serde_json::json!({ "provider": provider, "stored": true }), |_| {
+                format!("stored token for {provider}")
+            })?;
+        }
+        CredentialsAction::Clear { provider } => {
+            store
+                .clear_from_keyring(provider)
+                .map_err(|e| CliError::InvalidArg(format!("keyring: {e}")))?;
+            emit(fmt, &serde_json::json!({ "provider": provider, "cleared": true }), |_| {
+                format!("cleared token for {provider}")
+            })?;
+        }
+        CredentialsAction::List => {
+            let providers = store.provider_names();
+            let output = CredentialsListOutput { providers };
+            emit(fmt, &output, |o| {
+                if o.providers.is_empty() {
+                    "(no providers configured)".into()
+                } else {
+                    let mut lines = vec!["Configured providers:".to_string()];
+                    for p in &o.providers {
+                        lines.push(format!("  {p}: set"));
+                    }
+                    lines.join("\n")
+                }
+            })?;
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+// ---------------------------------------------------------------------------
 // list
 // ---------------------------------------------------------------------------
 
@@ -585,6 +867,8 @@ fn run_list(
                 rip_file_id: r.id,
                 cue_path: r.cue_path,
                 chd_path: r.chd_path,
+                ripper: r.provenance.as_ref().map(|p| p.ripper),
+                state: r.identification_state,
             })
             .collect();
         ListOutput::Unidentified(rows)

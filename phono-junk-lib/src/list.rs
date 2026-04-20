@@ -15,7 +15,9 @@
 
 use std::path::PathBuf;
 
+use junk_libs_disc::redumper::Ripper;
 use phono_junk_catalog::{Album, Id};
+use phono_junk_core::IdentificationState;
 use phono_junk_db::{DbError, crud};
 use rusqlite::Connection;
 use serde::Serialize;
@@ -38,16 +40,31 @@ pub struct ListRow {
     pub script: Option<String>,
     pub disc_count: usize,
     pub release_count: usize,
+    /// True when the album has at least one rip file whose provenance
+    /// isn't [`Ripper::Redumper`] (or has no provenance row at all — a
+    /// pre-sidecar rip). False when every rip is redumper-sourced *or*
+    /// the album has no rip files attached yet. Drives the library-audit
+    /// filter in the GUI.
+    pub has_non_redumper_rip: bool,
 }
 
-/// A scanned rip file with no matched provider — `rip_files.disc_id IS NULL`.
-/// Surfaced alongside identified albums in the GUI and as a disjoint mode in
-/// the CLI.
+/// A scanned rip file that isn't yet in `Identified` state — spans
+/// `Unscanned` / `Queued` / `Working` / `Unidentified` / `Failed`. The
+/// Status column in the GUI differentiates; the CLI mode lists all of
+/// them under `list --unidentified`.
 #[derive(Debug, Clone, Serialize)]
 pub struct UnidentifiedRow {
     pub rip_file_id: Id,
     pub cue_path: Option<PathBuf>,
     pub chd_path: Option<PathBuf>,
+    /// Detected ripper from the rip's provenance record, if any.
+    /// `None` means no sidecar existed at all (not audit-worthy);
+    /// `Some(Ripper::Redumper)` is the happy path; any other
+    /// `Some(_)` means a log was present but not produced by redumper.
+    pub ripper: Option<Ripper>,
+    /// Lifecycle phase for the Status column. Sprint 26.
+    #[serde(default)]
+    pub state: IdentificationState,
 }
 
 impl UnidentifiedRow {
@@ -116,6 +133,12 @@ pub struct ListFilters {
     /// When `false`, [`filter_entries`] drops every [`ListEntry::Unidentified`].
     /// Defaults to `true` so unmatched rips are visible by default.
     pub include_unidentified: bool,
+    /// When `true`, hide every row whose rips are entirely redumper-sourced.
+    /// An identified album passes iff [`ListRow::has_non_redumper_rip`] is
+    /// `true`; an unidentified rip passes iff its
+    /// [`UnidentifiedRow::ripper`] is not `Some(Ripper::Redumper)`.
+    /// Defaults to `false` — off by default.
+    pub missing_redumper_only: bool,
 }
 
 impl Default for ListFilters {
@@ -126,6 +149,7 @@ impl Default for ListFilters {
             country: None,
             label: None,
             include_unidentified: true,
+            missing_redumper_only: false,
         }
     }
 }
@@ -172,6 +196,7 @@ fn row_for_album(conn: &Connection, album: Album) -> Result<ListRow, DbError> {
             }
         })
         .unwrap_or((None, None));
+    let has_non_redumper_rip = album_has_non_redumper_rip(conn, album.id)?;
 
     Ok(ListRow {
         album_id: album.id,
@@ -185,7 +210,32 @@ fn row_for_album(conn: &Connection, album: Album) -> Result<ListRow, DbError> {
         script,
         disc_count,
         release_count: releases.len(),
+        has_non_redumper_rip,
     })
+}
+
+/// Does the album have any rip file that isn't redumper-sourced?
+///
+/// A single per-album round trip via a LEFT JOIN against
+/// `rip_file_provenance`. Good enough at catalog-MVP scale; a batched
+/// JOIN over the whole albums query is the obvious optimisation once a
+/// library grows past low thousands of albums (see TODO.md). `false`
+/// when the album has zero rip files at all — "no rip to audit" isn't
+/// the same signal as "rip exists but isn't redumper."
+fn album_has_non_redumper_rip(conn: &Connection, album_id: Id) -> Result<bool, DbError> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM rip_files rf
+             INNER JOIN discs d ON rf.disc_id = d.id
+             INNER JOIN releases r ON d.release_id = r.id
+             LEFT JOIN rip_file_provenance rfp ON rfp.rip_file_id = rf.id
+             WHERE r.album_id = ?1
+               AND (rfp.ripper IS NULL OR rfp.ripper != 'redumper')
+         )",
+        [album_id],
+        |row| row.get(0),
+    )?;
+    Ok(exists)
 }
 
 /// Apply every populated filter field; empty filters pass everything.
@@ -204,10 +254,13 @@ pub fn filter_rows(rows: Vec<ListRow>, f: &ListFilters) -> Vec<ListRow> {
 pub fn load_list_entries(conn: &Connection) -> Result<Vec<ListEntry>, DbError> {
     let mut out: Vec<ListEntry> = load_list_rows(conn)?.into_iter().map(ListEntry::Album).collect();
     for rf in crud::list_unidentified_rip_files(conn)? {
+        let ripper = rf.provenance.as_ref().map(|p| p.ripper);
         out.push(ListEntry::Unidentified(UnidentifiedRow {
             rip_file_id: rf.id,
             cue_path: rf.cue_path,
             chd_path: rf.chd_path,
+            ripper,
+            state: rf.identification_state,
         }));
     }
     Ok(out)
@@ -223,8 +276,14 @@ pub fn filter_entries(entries: Vec<ListEntry>, f: &ListFilters) -> Vec<ListEntry
         .into_iter()
         .filter(|e| match e {
             ListEntry::Album(r) => matches(r, f),
-            ListEntry::Unidentified(_) => {
+            ListEntry::Unidentified(u) => {
                 if !f.include_unidentified {
+                    return false;
+                }
+                // An unidentified rip is "missing redumper provenance" when
+                // its sidecar produced anything other than Ripper::Redumper,
+                // including no sidecar at all (ripper == None).
+                if f.missing_redumper_only && u.ripper == Some(Ripper::Redumper) {
                     return false;
                 }
                 f.artist.is_none()
@@ -261,6 +320,9 @@ fn matches(row: &ListRow, f: &ListFilters) -> bool {
             return false;
         }
     }
+    if f.missing_redumper_only && !row.has_non_redumper_rip {
+        return false;
+    }
     true
 }
 
@@ -293,6 +355,7 @@ mod tests {
             script: None,
             disc_count: 1,
             release_count: 1,
+            has_non_redumper_rip: false,
         }
     }
 
@@ -366,6 +429,8 @@ mod tests {
             rip_file_id: id,
             cue_path: Some(PathBuf::from(cue)),
             chd_path: None,
+            ripper: None,
+            state: IdentificationState::Unidentified,
         }
     }
 
@@ -410,11 +475,265 @@ mod tests {
     }
 
     #[test]
+    fn missing_redumper_only_keeps_only_flagged_albums() {
+        let mut a = mk_row(1, "A", None, None, None, None);
+        a.has_non_redumper_rip = true;
+        let b = mk_row(2, "B", None, None, None, None); // all-redumper
+        let rows = vec![a, b];
+        let f = ListFilters {
+            missing_redumper_only: true,
+            ..Default::default()
+        };
+        let out = filter_rows(rows, &f);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].album_id, 1);
+    }
+
+    #[test]
+    fn missing_redumper_only_hides_redumper_unidentified() {
+        let mut rd = mk_unid(7, "/tmp/rd.cue");
+        rd.ripper = Some(Ripper::Redumper);
+        let mut other = mk_unid(8, "/tmp/eac.cue");
+        other.ripper = Some(Ripper::Eac);
+        let none = mk_unid(9, "/tmp/bare.cue"); // ripper = None
+        let entries = vec![
+            ListEntry::Unidentified(rd),
+            ListEntry::Unidentified(other),
+            ListEntry::Unidentified(none),
+        ];
+        let f = ListFilters {
+            missing_redumper_only: true,
+            ..Default::default()
+        };
+        let out = filter_entries(entries, &f);
+        // Redumper-sourced rip drops; EAC and no-sidecar both pass.
+        assert_eq!(out.len(), 2);
+        let ids: Vec<Id> = out
+            .iter()
+            .filter_map(|e| match e {
+                ListEntry::Unidentified(u) => Some(u.rip_file_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec![8, 9]);
+    }
+
+    #[test]
+    fn unidentified_row_carries_ripper_from_provenance() {
+        use phono_junk_catalog::{RipFile, RipperProvenance};
+        use phono_junk_core::{IdentificationConfidence, IdentificationState};
+        use phono_junk_db::{crud, open_memory};
+
+        let conn = open_memory().unwrap();
+        let prov = RipperProvenance {
+            ripper: Ripper::Redumper,
+            version: None,
+            drive: None,
+            read_offset: None,
+            log_path: PathBuf::from("/tmp/a.log"),
+            rip_date: None,
+        };
+        crud::insert_rip_file(
+            &conn,
+            &RipFile {
+                id: 0,
+                disc_id: None,
+                cue_path: Some(PathBuf::from("/tmp/a.cue")),
+                chd_path: None,
+                bin_paths: Vec::new(),
+                mtime: None,
+                size: None,
+                identification_confidence: IdentificationConfidence::Unidentified,
+                identification_source: None,
+                accuraterip_status: None,
+                last_verified_at: None,
+                last_identify_errors: None,
+                last_identify_at: None,
+                provenance: Some(prov),
+                identification_state: IdentificationState::Unidentified,
+                last_state_change_at: None,
+            },
+        )
+        .unwrap();
+        // A second unidentified rip with no provenance at all.
+        crud::insert_rip_file(
+            &conn,
+            &RipFile {
+                id: 0,
+                disc_id: None,
+                cue_path: Some(PathBuf::from("/tmp/b.cue")),
+                chd_path: None,
+                bin_paths: Vec::new(),
+                mtime: None,
+                size: None,
+                identification_confidence: IdentificationConfidence::Unidentified,
+                identification_source: None,
+                accuraterip_status: None,
+                last_verified_at: None,
+                last_identify_errors: None,
+                last_identify_at: None,
+                provenance: None,
+                identification_state: IdentificationState::Unidentified,
+                last_state_change_at: None,
+            },
+        )
+        .unwrap();
+
+        let entries = load_list_entries(&conn).unwrap();
+        let unids: Vec<&UnidentifiedRow> = entries
+            .iter()
+            .filter_map(|e| match e {
+                ListEntry::Unidentified(u) => Some(u),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(unids.len(), 2);
+        assert_eq!(unids[0].ripper, Some(Ripper::Redumper));
+        assert_eq!(unids[1].ripper, None);
+    }
+
+    #[test]
+    fn album_has_non_redumper_rip_respects_provenance_state() {
+        use phono_junk_catalog::{
+            Album, Disc, Release, RipFile, RipperProvenance,
+        };
+        use phono_junk_core::{IdentificationConfidence, IdentificationState};
+        use phono_junk_db::{crud, open_memory};
+
+        fn seed_album(conn: &rusqlite::Connection, title: &str) -> (Id, Id) {
+            let album_id = crud::insert_album(
+                conn,
+                &Album {
+                    id: 0,
+                    title: title.into(),
+                    sort_title: None,
+                    artist_credit: None,
+                    year: None,
+                    mbid: None,
+                    primary_type: None,
+                    secondary_types: Vec::new(),
+                    first_release_date: None,
+                },
+            )
+            .unwrap();
+            let release_id = crud::insert_release(
+                conn,
+                &Release {
+                    id: 0,
+                    album_id,
+                    country: None,
+                    date: None,
+                    label: None,
+                    catalog_number: None,
+                    barcode: None,
+                    mbid: None,
+                    status: None,
+                    language: None,
+                    script: None,
+                },
+            )
+            .unwrap();
+            let disc_id = crud::insert_disc(
+                conn,
+                &Disc {
+                    id: 0,
+                    release_id,
+                    disc_number: 1,
+                    format: "CD".into(),
+                    toc: None,
+                    mb_discid: None,
+                    cddb_id: None,
+                    ar_discid1: None,
+                    ar_discid2: None,
+                    dbar_raw: None,
+                    mcn: None,
+                },
+            )
+            .unwrap();
+            (album_id, disc_id)
+        }
+
+        fn insert_rip(
+            conn: &rusqlite::Connection,
+            disc_id: Id,
+            prov: Option<RipperProvenance>,
+        ) {
+            crud::insert_rip_file(
+                conn,
+                &RipFile {
+                    id: 0,
+                    disc_id: Some(disc_id),
+                    cue_path: Some(PathBuf::from("/tmp/x.cue")),
+                    chd_path: None,
+                    bin_paths: Vec::new(),
+                    mtime: None,
+                    size: None,
+                    identification_confidence: IdentificationConfidence::Certain,
+                    identification_source: None,
+                    accuraterip_status: None,
+                    last_verified_at: None,
+                    last_identify_errors: None,
+                    last_identify_at: None,
+                    provenance: prov,
+                    identification_state: IdentificationState::Identified,
+                    last_state_change_at: None,
+                },
+            )
+            .unwrap();
+        }
+
+        let conn = open_memory().unwrap();
+
+        // Album A: one disc, one redumper rip. Should be false.
+        let (a, a_disc) = seed_album(&conn, "A");
+        insert_rip(
+            &conn,
+            a_disc,
+            Some(RipperProvenance {
+                ripper: Ripper::Redumper,
+                version: None,
+                drive: None,
+                read_offset: None,
+                log_path: PathBuf::from("/tmp/a.log"),
+                rip_date: None,
+            }),
+        );
+        assert!(!album_has_non_redumper_rip(&conn, a).unwrap());
+
+        // Album B: one disc, one rip with no provenance. Should be true.
+        let (b, b_disc) = seed_album(&conn, "B");
+        insert_rip(&conn, b_disc, None);
+        assert!(album_has_non_redumper_rip(&conn, b).unwrap());
+
+        // Album C: one disc, one EAC-class rip. Should be true.
+        let (c, c_disc) = seed_album(&conn, "C");
+        insert_rip(
+            &conn,
+            c_disc,
+            Some(RipperProvenance {
+                ripper: Ripper::Eac,
+                version: None,
+                drive: None,
+                read_offset: None,
+                log_path: PathBuf::from("/tmp/c.log"),
+                rip_date: None,
+            }),
+        );
+        assert!(album_has_non_redumper_rip(&conn, c).unwrap());
+
+        // Album D: no rip files at all. Should be false (not audit-worthy).
+        let (d, _) = seed_album(&conn, "D");
+        assert!(!album_has_non_redumper_rip(&conn, d).unwrap());
+    }
+
+    #[test]
     fn unidentified_row_display_path_prefers_cue() {
         let r = UnidentifiedRow {
             rip_file_id: 1,
             cue_path: Some(PathBuf::from("/tmp/a.cue")),
             chd_path: Some(PathBuf::from("/tmp/a.chd")),
+            ripper: None,
+            state: IdentificationState::Unidentified,
         };
         assert_eq!(r.display_path().unwrap(), &PathBuf::from("/tmp/a.cue"));
 
@@ -422,6 +741,8 @@ mod tests {
             rip_file_id: 1,
             cue_path: None,
             chd_path: Some(PathBuf::from("/tmp/a.chd")),
+            ripper: None,
+            state: IdentificationState::Unidentified,
         };
         assert_eq!(r.display_path().unwrap(), &PathBuf::from("/tmp/a.chd"));
 
@@ -429,6 +750,8 @@ mod tests {
             rip_file_id: 1,
             cue_path: None,
             chd_path: None,
+            ripper: None,
+            state: IdentificationState::Unidentified,
         };
         assert!(r.display_path().is_none());
     }

@@ -285,6 +285,9 @@ fn identify_persists_humanized_provider_errors() {
             last_verified_at: None,
             last_identify_errors: None,
             last_identify_at: None,
+            provenance: None,
+            identification_state: phono_junk_core::IdentificationState::Queued,
+            last_state_change_at: None,
         },
     )
     .unwrap();
@@ -328,6 +331,9 @@ fn unidentified_marks_rip_file_without_creating_album() {
             last_verified_at: None,
             last_identify_errors: None,
             last_identify_at: None,
+            provenance: None,
+            identification_state: phono_junk_core::IdentificationState::Queued,
+            last_state_change_at: None,
         },
     )
     .unwrap();

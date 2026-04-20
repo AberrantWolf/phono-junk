@@ -32,11 +32,19 @@ impl PhonoContext {
     }
 
     /// Register the MVP provider set: MusicBrainz (identification + CAA
-    /// assets) plus iTunes (asset-only fallback), backed by a single shared
-    /// [`HttpClient`] so per-host token buckets coordinate across providers.
-    /// MusicBrainz and Cover Art Archive notably both hit `musicbrainz.org`-
-    /// adjacent hosts; running them on independent clients would
-    /// double-spend the 1 req/sec quota under parallel fan-out.
+    /// assets), iTunes (asset-only fallback), Discogs (barcode /
+    /// catalog-number identification + asset), and Barcode Lookup
+    /// (generic-barcode final fallback, identification + asset), backed
+    /// by a single shared [`HttpClient`] so per-host token buckets
+    /// coordinate across providers. MusicBrainz and Cover Art Archive
+    /// notably both hit `musicbrainz.org`-adjacent hosts; running them
+    /// on independent clients would double-spend the 1 req/sec quota
+    /// under parallel fan-out.
+    ///
+    /// Registration order matters: consensus breaks ties by
+    /// registration order, so MB → Discogs → Barcode Lookup places
+    /// Barcode Lookup last — it contributes only when the
+    /// music-specific databases return nothing.
     ///
     /// Also constructs an [`AccurateRipClient`] sharing the same client, so
     /// Sprint 13's `verify` subcommand has a ready handle.
@@ -45,14 +53,20 @@ impl PhonoContext {
     /// descriptive UA with contact info (e.g.
     /// `"phono-junk/0.1 ( you@example.com )"`).
     ///
-    /// Amazon is registered once an ASIN source exists (Discogs or user
-    /// entry) — both deferred post-MVP. See TODO.md.
+    /// On construction, the credential store tries to populate itself
+    /// from the OS keyring. A missing backend is non-fatal: identification
+    /// still works, Discogs just silently skips without a token.
+    ///
+    /// Amazon is registered once an ASIN source exists (populated from
+    /// Discogs responses) — deferred. See TODO.md.
     pub fn with_default_providers(user_agent: impl Into<String>) -> Result<Self, HttpError> {
         let http = HttpClient::builder()
             .user_agent(user_agent)
             .host_quota("musicbrainz.org", Quota::per_second(nonzero!(1u32)))
             .host_quota("coverartarchive.org", Quota::per_second(nonzero!(1u32)))
             .host_quota("itunes.apple.com", Quota::per_minute(nonzero!(20u32)))
+            .host_quota("api.discogs.com", Quota::per_second(nonzero!(1u32)))
+            .host_quota("api.barcodelookup.com", Quota::per_second(nonzero!(1u32)))
             .host_quota(ACCURATERIP_HOST, Quota::per_second(nonzero!(1u32)))
             .build()?;
 
@@ -64,8 +78,28 @@ impl PhonoContext {
         ));
         ctx.aggregator
             .register_asset_provider(Box::new(phono_junk_itunes::ITunesProvider::with_client(http.clone())));
+        // Discogs implements both traits on one struct. Box twice so each
+        // aggregator slot has its own owned pointer.
+        ctx.aggregator
+            .register_identifier(Box::new(phono_junk_discogs::DiscogsProvider::with_client(http.clone())));
+        ctx.aggregator
+            .register_asset_provider(Box::new(phono_junk_discogs::DiscogsProvider::with_client(http.clone())));
+        // Barcode Lookup — final fallback. Registered after Discogs so
+        // consensus registration-order ties favour the music-specific
+        // databases. Same dual-trait / double-box pattern as Discogs.
+        ctx.aggregator.register_identifier(Box::new(
+            phono_junk_barcodelookup::BarcodelookupProvider::with_client(http.clone()),
+        ));
+        ctx.aggregator.register_asset_provider(Box::new(
+            phono_junk_barcodelookup::BarcodelookupProvider::with_client(http.clone()),
+        ));
         ctx.accuraterip = Some(AccurateRipClient::with_client(http.clone()));
         ctx.http = Some(http);
+
+        if let Err(e) = ctx.credentials.load_from_keyring() {
+            log::warn!("credentials: {e}");
+        }
+
         Ok(ctx)
     }
 }

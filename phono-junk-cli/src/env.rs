@@ -48,7 +48,22 @@ pub fn resolve_user_agent(flag: Option<&str>) -> String {
     phono_junk_lib::env::default_user_agent()
 }
 
-/// Build a full environment: ensure parent dir exists, open DB, register providers.
+/// Build a full environment: ensure parent dir exists, open DB, register
+/// providers, load credentials from keyring + env.
+///
+/// Credential precedence (lowest to highest):
+///
+/// 1. Keyring entries under service `"phono-junk"` (loaded by
+///    `PhonoContext::with_default_providers`).
+/// 2. Environment variables. Currently honoured: `PHONO_DISCOGS_TOKEN`.
+///    Env wins because CI and one-off runs occasionally need to override
+///    a stored keyring entry.
+///
+/// Note the env-var caveats: process environment is readable by any
+/// same-uid process (`/proc/<pid>/environ` on Linux), may land in crash
+/// dumps, and enters shell history if set inline (`DISCOGS_TOKEN=… cmd`).
+/// For regular use, prefer `phono-junk credentials set` which writes
+/// the OS keyring.
 pub fn open_env(
     db_flag: Option<&Path>,
     ua_flag: Option<&str>,
@@ -63,9 +78,16 @@ pub fn open_env(
     }
     let conn = phono_junk_db::open_database(&db_path)?;
     let ctx = if need_network {
-        PhonoContext::with_default_providers(resolve_user_agent(ua_flag))?
+        let ctx = PhonoContext::with_default_providers(resolve_user_agent(ua_flag))?;
+        overlay_env_credentials(&ctx);
+        ctx
     } else {
-        PhonoContext::new()
+        let ctx = PhonoContext::new();
+        if let Err(e) = ctx.credentials.load_from_keyring() {
+            log::debug!("credentials: {e}");
+        }
+        overlay_env_credentials(&ctx);
+        ctx
     };
     Ok(CliEnv {
         conn,
@@ -73,4 +95,15 @@ pub fn open_env(
         fmt,
         db_path,
     })
+}
+
+/// Overlay recognised `PHONO_*_TOKEN` env vars on top of the keyring-loaded
+/// credential store. Empty strings are ignored (avoids accidentally clearing
+/// a keyring-stored token with `PHONO_DISCOGS_TOKEN=`).
+fn overlay_env_credentials(ctx: &PhonoContext) {
+    if let Ok(token) = std::env::var("PHONO_DISCOGS_TOKEN") {
+        if !token.is_empty() {
+            ctx.credentials.set("discogs", token);
+        }
+    }
 }

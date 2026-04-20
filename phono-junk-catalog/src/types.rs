@@ -1,4 +1,6 @@
-use phono_junk_core::{IdentificationConfidence, IdentificationSource, Toc};
+use chrono::{DateTime, Utc};
+use junk_libs_disc::redumper::{DriveInfo, Ripper};
+use phono_junk_core::{IdentificationConfidence, IdentificationSource, IdentificationState, Toc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -50,6 +52,14 @@ pub struct Disc {
     pub ar_discid2: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dbar_raw: Option<Vec<u8>>,
+    /// Media Catalog Number as encoded in the disc's subchannel Q data —
+    /// a *physical-disc fact*, distinct from [`Release::barcode`] which
+    /// reflects what metadata databases report. Usually equal; a
+    /// mismatch is real information (bootleg, mispressing, regional
+    /// variant) and is surfaced via the [`Disagreement`] machinery.
+    /// Populated on ingest when a redumper log sidecar carries an MCN.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcn: Option<String>,
 }
 
 impl Default for Disc {
@@ -65,6 +75,7 @@ impl Default for Disc {
             ar_discid1: None,
             ar_discid2: None,
             dbar_raw: None,
+            mcn: None,
         }
     }
 }
@@ -103,6 +114,55 @@ pub struct RipFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_identify_errors: Option<Vec<IdentifyAttemptError>>,
     pub last_identify_at: Option<String>,
+    /// Provenance recorded from a ripper-specific sidecar (e.g. redumper's
+    /// `.log`): which ripper produced the rip, on what drive, at what
+    /// read offset, on what date. `None` means "we haven't detected any
+    /// ripper-specific marker" — distinct from
+    /// [`Ripper::Unknown`](junk_libs_disc::redumper::Ripper::Unknown)
+    /// which means "a log was present but its format didn't match any
+    /// known ripper." Unknown rippers still get a `Some` with empty
+    /// fields so the audit query can flag them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<RipperProvenance>,
+    /// Explicit lifecycle state: queued / working / identified / unidentified
+    /// / failed. Distinct from [`IdentificationConfidence`] — state is about
+    /// the pipeline ("has identify run yet?"), confidence about the match
+    /// ("how trustworthy is it?"). Drives the Status column in the GUI and
+    /// separates "no provider matched" from "we haven't tried yet."
+    #[serde(default)]
+    pub identification_state: IdentificationState,
+    /// RFC3339 timestamp of the last `identification_state` transition.
+    /// Used by the GUI to sort "freshly queued" rows first and to show
+    /// "working since …" labels; not load-bearing for correctness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_state_change_at: Option<String>,
+}
+
+/// How a rip was produced — metadata that *only* the ripper knows
+/// (not derivable from the PCM / CUE / CHD itself).
+///
+/// Drives the library-audit view ("which rips lack redumper provenance?")
+/// and informs future re-rip suggestions.
+///
+/// Constructed from a parsed [`junk_libs_disc::redumper::RedumperLog`]
+/// by the scan pipeline; other rippers (EAC, XLD, …) will populate the
+/// same struct once their log formats get parsers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RipperProvenance {
+    pub ripper: Ripper,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive: Option<DriveInfo>,
+    /// Combined read offset applied during ripping, in audio samples.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_offset: Option<i32>,
+    pub log_path: PathBuf,
+    /// When the rip was produced. Parsed from the log's timestamp by the
+    /// scan pipeline; `None` when the log doesn't record one or the value
+    /// failed to parse as a datetime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rip_date: Option<DateTime<Utc>>,
 }
 
 /// One row of "what each provider said" from the most recent identify attempt.
@@ -204,6 +264,20 @@ pub struct Disagreement {
     pub resolved: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+}
+
+/// A folder the user has told phono-junk to treat as a library root —
+/// scanned automatically whenever the catalog DB is opened. Storing
+/// these in the DB (rather than in a settings file) keeps the association
+/// "this library tracks these folders" so a user with multiple catalogs
+/// doesn't accidentally rescan the wrong tree. Sprint 27.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LibraryFolder {
+    pub id: Id,
+    pub path: PathBuf,
+    /// RFC3339 timestamp from `datetime('now')` when the row was first
+    /// inserted. Re-adding an existing path leaves the original value.
+    pub added_at: Option<String>,
 }
 
 /// A user-curated override. `sub_path` targets nested fields like

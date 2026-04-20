@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use phono_junk_catalog::RipFile;
-use phono_junk_core::{IdentificationConfidence, IdentificationSource};
+use phono_junk_core::{IdentificationConfidence, IdentificationSource, IdentificationState};
 use phono_junk_db::{cache, crud, open_memory};
 
 fn rip(mtime: i64, size: u64) -> RipFile {
@@ -19,6 +19,9 @@ fn rip(mtime: i64, size: u64) -> RipFile {
         last_verified_at: None,
         last_identify_errors: None,
         last_identify_at: None,
+        provenance: None,
+        identification_state: IdentificationState::Unscanned,
+        last_state_change_at: None,
     }
 }
 
@@ -105,6 +108,9 @@ fn chd_rip_round_trips_via_chd_path() {
         last_verified_at: None,
         last_identify_errors: None,
         last_identify_at: None,
+        provenance: None,
+        identification_state: IdentificationState::Identified,
+        last_state_change_at: None,
     };
     let id = cache::upsert_rip_file(&conn, &chd).unwrap();
 

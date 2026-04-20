@@ -353,6 +353,7 @@ fn upsert_disc(
         ar_discid1: ids.ar_discid1.clone(),
         ar_discid2: ids.ar_discid2.clone(),
         dbar_raw: None,
+        mcn: None,
     };
     Ok((crud::insert_disc(conn, &disc)?, false))
 }
@@ -635,6 +636,7 @@ pub(crate) fn humanize_provider_error(
         ProviderError::Auth(_) => "authentication failed".to_string(),
         ProviderError::RateLimited => "rate limited".to_string(),
         ProviderError::Parse(_) => "unexpected response from provider".to_string(),
+        ProviderError::MissingCredential(_) => "no token (open Settings…)".to_string(),
         ProviderError::Other(s) => truncate(s, 80).to_string(),
     };
     IdentifyAttemptError {

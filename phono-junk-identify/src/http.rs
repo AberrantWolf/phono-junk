@@ -116,6 +116,19 @@ impl HttpClient {
     /// Issue a rate-limited GET. Waits on the per-host bucket (if registered)
     /// before sending. Injects the configured `User-Agent` header.
     pub fn get(&self, url_str: &str) -> Result<HttpResponse, HttpError> {
+        self.get_with_headers(url_str, &[])
+    }
+
+    /// GET with additional request headers (e.g. `Authorization`). The
+    /// configured `User-Agent` is always injected; caller-supplied headers
+    /// are additive. Header values are passed to `reqwest` verbatim and
+    /// are **never** logged — callers owning secrets do not need to scrub
+    /// them before passing in.
+    pub fn get_with_headers(
+        &self,
+        url_str: &str,
+        headers: &[(reqwest::header::HeaderName, reqwest::header::HeaderValue)],
+    ) -> Result<HttpResponse, HttpError> {
         let url =
             Url::parse(url_str).map_err(|e| HttpError::InvalidUrl(format!("{url_str}: {e}")))?;
         let host = url
@@ -136,16 +149,18 @@ impl HttpClient {
         }
 
         log::debug!("HTTP GET {url_str}");
-        let resp = self
+        let mut builder = self
             .http
             .get(url_str)
-            .header(reqwest::header::USER_AGENT, &self.user_agent)
-            .send()
-            .map_err(|e| {
-                let err = map_reqwest_err(e);
-                log::warn!("HTTP GET {url_str} failed: {err}");
-                err
-            })?;
+            .header(reqwest::header::USER_AGENT, &self.user_agent);
+        for (name, value) in headers {
+            builder = builder.header(name.clone(), value.clone());
+        }
+        let resp = builder.send().map_err(|e| {
+            let err = map_reqwest_err(e);
+            log::warn!("HTTP GET {url_str} failed: {err}");
+            err
+        })?;
 
         let status = resp.status();
         log::debug!("HTTP GET {url_str} → {}", status.as_u16());
