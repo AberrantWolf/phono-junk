@@ -131,6 +131,7 @@ pub enum IdentificationSource {
     Discogs,
     ITunes,
     Amazon,
+    Tower,
     UserTagged,
     Import,
     /// A redumper sidecar (log or CD-TEXT) read off the local filesystem.

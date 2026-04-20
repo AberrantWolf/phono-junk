@@ -1,0 +1,156 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head prefix="og: http://ogp.me/ns# fb: http://ogp.me/ns/fb# article: http://ogp.me/ns/article#">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>タワーレコード音楽情報データベース</title>
+    <base href="/" />
+    <link rel="icon" href="tfavicon.png" type="image/x-icon">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css" integrity="sha384-9aIt2nRpC12Uk9gS9baDl411NQApFmC26EwAOH8WgZl5MYYxFfc+NcPb1dKGj7Sk" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.12.0/css/all.css">
+
+    <link href="_content/Blazorise/blazorise.css" rel="stylesheet" />
+    <link href="_content/Blazorise.Bootstrap/blazorise.bootstrap.css" rel="stylesheet" />
+    <link href="_content/Sotsera.Blazor.Toaster/toastr.min.css" rel="stylesheet" />
+
+    <link href="https://fonts.googleapis.com/css?family=Lato:400,700|Noto+Sans+JP:400,700" rel="stylesheet">
+    <link href="css/site.css?v=QtpHp2gXmvODo61bMaOrKHcigb858Ed3eIDtPfUs5v8" rel="stylesheet" />
+    <link rel="stylesheet" href="css/towerrecordsbase.css?20240808&amp;v=x_NV4Agdiy2mkdd9-T9MQVVnh8TFKhbgw9bqjH24bpE" />
+    <link rel="stylesheet" href="css/release/assets/css/index.css?20240730&amp;v=dXiktOdqa4zh-yGJfR75ShFv3k-IZRLBbS-nGZl_qts" />
+    <link rel="stylesheet" href="css/artist/assets/css/index.css?20240730&amp;v=2JRaGo3e8naEqhrAdI8_sKM2f3knCJAoTSqqG-sFDe4" />
+    <link rel="stylesheet" href="css/common/assets/css/index.css?20240730&amp;v=uBYb-hOt3jUsiw2CissHLgFpXStb5eQVFzLeRiKbYv0" />
+    <script src="/js/MyScript.js?20240808"></script>
+    <!-- Google Tag Manager -->
+    <script>
+    (function (w, d, s, l, i) {
+            w[l] = w[l] || []; w[l].push({
+                'gtm.start':
+                    new Date().getTime(), event: 'gtm.js'
+            }); var f = d.getElementsByTagName(s)[0],
+                j = d.createElement(s), dl = l != 'dataLayer' ? '&l=' + l : ''; j.async = true; j.src =
+                    'https://www.googletagmanager.com/gtm.js?id=' + i + dl; f.parentNode.insertBefore(j, f);
+        })(window, document, 'script', 'dataLayer', 'GTM-TN8BWSC');</script>
+    <!-- End Google Tag Manager -->
+</head>
+<body>
+    <!-- Google Tag Manager (noscript) -->
+    <noscript>
+        <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-TN8BWSC"
+                height="0" width="0" style="display:none;visibility:hidden"></iframe>
+    </noscript>
+    <!-- End Google Tag Manager (noscript) -->
+
+    <div id="components-reconnect-modal" class="my-reconnect-modal components-reconnect-hide">
+        <div class="show">
+            <h5 style="margin-top: 20px">サーバとの接続が切断されました。ページをリロードしてください。</h5>
+        </div>
+        <div class="failed">
+            failed
+        </div>
+        <div class="rejected">
+            rejected
+        </div>
+    </div>
+
+    <div id="pageTop"></div>
+    <app>
+        <!--Blazor:{"sequence":0,"type":"server","prerenderId":"cf0ed50a67af4e198801384188f7aa71","descriptor":"CfDJ8FIixvNsetVKpqGoqj7zwv0sTRcnCs/Ok6nY/I5fF9kyPxzCA7WgJ7I4bMkLxzekQmWUVP0/cC7vRTkjfUBbGR6yYBO\u002BK5WdIbDKqp50/t0qdrt32ewMD6sZUri8xClsuE64yBi3tt54\u002B8QFYuF99aNfqi2ijCIj2IC/Fe77stxNF3pIZcQ\u002BAARQw8v7gGqOmKAur9UxWVSW\u002B3VVkmEpFevaVmbx\u002BB2EFG5vqwuE8YhXUculyVasfjiEOu1vZnjvHGbLlzS70teS6GX8R13i6S7jj3lUi/e9c6gbE4n9zhEegNj3gNGYj/f7AQq8i06LlJyHakZTWmUJmZK7mxyV3Z\u002BUrnS3UdeXH9uHWC\u002BauiLoZdoBOhiksxBveh1RrrrJU6H\u002BUMeATsI3cDxlYhRMISfTddpsvKUwzSLPzWjc/YDZgBI5zkNCMvFyMEMtKqFmppyAM392CVsJ2vT/8tA\u002BA3j\u002B9PENvIRFtewTRqJg/0njA\u002Bn2qGaWr/tIfs\u002BcaontH5OwmHj1/KMEWuc5fCBdWQmR77KVm6y91sCw4FtIxYxRmgTvliZ5WLXCVUi8f5Wb2Q=="}--><div id="toast-container" class="toast-top-right">
+</div>
+
+<div class="min-vh-100 d-flex flex-column"><header><nav class="navbar navbar-expand-lg navbar-dark bg-black lighten-1"><a class="navbar-brand" href="/"><img class="towerlogo" src="img/trlogo_black.svg" alt="TOWER RECORDS"></a>
+    <ul class="navbar-nav ml-auto nav-flex-icons header-menu align-items-center"><li class="h5 mb-0"><a href="https://mpp.tower.jp/notifications?utm_source=tr_mdb&amp;utm_medium=referral&amp;" class="text-light"><i class="fas fa-bell"></i></a></li>
+        <li class="nav-item dropdown ml-4 ml-lg-4 ml-md-5"><a class="nav-link" id="navbarDropdownMenuLink-55" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"><span class="navbar-toggler-icon"></span></a>
+            <div class="dropdown-menu dropdown-menu-lg-right dropdown-secondary header-refinement-list header-menu-box" aria-labelledby="navbarDropdownMenuLink-55"><a class="dropdown-item" href="https://tower.jp/ec/Customer/Login.aspx?npage=http%3A%2F%2Fmdb.tower.jp%2Fsearch%2F075992665629%2F0">ログイン</a></div><div class="login-link"><a href="https://tower.jp/ec/Customer/Login.aspx?npage=http%3A%2F%2Fmdb.tower.jp%2Fsearch%2F075992665629%2F0">ログイン</a></div></li></ul>
+
+    <div class="d-flex search-block mr-auto"><li class="nav-item search-box mr-2 d-flex position-relative align-items-center"><div class="d-flex position-relative w-100 search-area"><div id="0HNKU8UV6HIR0" class="dropdown d-flex align-items-center search-list" TValue="int"><button id="0HNKU8UV6HIR1" type="button" class="btn dropdown-toggle btn-primary" data-toggle="dropdown">&#x3059;&#x3079;&#x3066;</button>
+    <div class="dropdown-menu"><a class="dropdown-item">&#x3059;&#x3079;&#x3066;</a><a class="dropdown-item">&#x30A2;&#x30FC;&#x30C6;&#x30A3;&#x30B9;&#x30C8;</a><a class="dropdown-item">&#x30BF;&#x30A4;&#x30C8;&#x30EB;</a><a class="dropdown-item">&#x30D0;&#x30FC;&#x30B3;&#x30FC;&#x30C9;</a><a class="dropdown-item">&#x898F;&#x683C;&#x54C1;&#x756A;</a></div></div>
+                <form action="#" method="get" class="w-100"><fieldset><input type="search" class="form-control form-control-sm search-input" id="SearchInput"></input></fieldset></form>
+                <div class="d-flex justify-content-center align-items-center h-100" style="position: absolute; top: 0px; right: 0px; width:30px; cursor:pointer;"><i class="fas fa-search" aria-hidden="true" style="color: black;"></i></div></div></li>
+        <ul class="navbar-nav mr-auto"><li class="nav-item dropdown"><a class="nav-link dropdown-toggle" id="navbarDropdownMenuLink-555" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                    一覧
+                </a>
+                <div class="dropdown-menu dropdown-secondary header-refinement-list" aria-labelledby="navbarDropdownMenuLink-555"><a class="dropdown-item d-none" href="/search/artist">アーティスト</a>
+                    <a class="dropdown-item" href="/search/genre">ジャンル</a>
+                    <a class="dropdown-item" href="/search/format">フォーマット</a>
+                    <a class="dropdown-item" href="/search/role" style="display:none;">クレジット</a></div></li></ul></div></nav></header>
+
+    <div class="main"><div class="content"><!--Head:{"type":"title","title":"\u30BF\u30EF\u30FC\u30EC\u30B3\u30FC\u30C9\u97F3\u697D\u60C5\u5831\u30C7\u30FC\u30BF\u30D9\u30FC\u30B9\uFF5C\u691C\u7D22\u4E00\u89A7"}--><div class="container mb-4"><div class="row"><div class="col-12"><div class="row mb-1"><div class="col-3 col-md-1 mb-1"><a href="/release/10054881/Fourplay" title="Fourplay" alt="Fourplay"><img src="https://cdn.tower.jp/za/o/29/075992665629.jpg?size=300x300" alt="Fourplay" class="loading-img-icon w-100 h-100" style="object-fit:contain;" title="Fourplay"></img></a></div>
+                                <div class="col-9 col-md-11"><div class="mb-1 search-result-cat-label w-min-content">Release</div>
+                                    <div class="h5 f18 mb-1"><a href="/release/10054881/Fourplay" title="Fourplay" alt="Fourplay">Fourplay</a></div>
+                                    <div class="mb-2" style="color:darkgrey;"><a href="/artist/10017811/Fourplay">Fourplay</a></div><div class="disp-fl mb-1"><div class="format-val mr-1">CD</div></div><div class="mb-2"><a href="/genre/1301">Jazz</a></div><div class="disp-fl mb-1"><div class="mr-1">発売日：</div>
+                                            <div>1994&#x5E74;8&#x6708;4&#x65E5;</div></div></div></div><hr id="0HNKU8UV6HIR2" class="divider divider-solid" /><div class="col-12 mt-2 mb-2 text-center"></div>
+                    <div id="observerTarget"></div></div></div></div>
+    <div class="upper"><i class="far fa-arrow-alt-circle-up" style="font-size:2rem;"></i></div></div></div>
+
+    <footer class="mt-auto"><div class="bg-black" style="font-size:12.8px;"><div class="row ml-0 mr-0 pt-3 pb-3"><div class="col-12 col-md-1"></div>
+        <div class="col-12 col-md-2 mb-2"><div class="font-weight-bold mb-2">
+                オンラインショップ情報
+            </div>
+            <div class="mb-1" style="font-size:11.2px;"><a href="https://tower.jp/">タワーレコード オンライン</a></div>
+            <div class="mb-1" style="font-size:11.2px;"><a href="https://tower.jp/ec/Customer/NewAccount.aspx">新規会員登録</a></div>
+            <div class="mb-1" style="font-size:11.2px;"><a href="https://tower.jp/ec/Customer/Menu">マイページ</a></div></div>
+        <div class="col-12 col-md-2 mb-2"><div class="font-weight-bold mb-2">
+                音楽情報データベース
+            </div>
+            <div class="mb-1" style="font-size:11.2px;"><a href="/">音楽情報データベース</a></div>
+            <div class="mb-1" style="font-size:11.2px;"><a href="https://tower.jp/site/howto/wantlist">欲しい物リストの使い方</a></div>
+            <div class="mb-1" style="font-size:11.2px;"><a href="https://tower.jp/site/howto/collection">コレクション機能の使い方</a></div></div>
+        <div class="col-12 col-md-2 mb-2"><div class="font-weight-bold mb-2">
+                よくあるご質問 (Q&A)
+            </div>
+            <div class="mb-1" style="font-size:11.2px;"><a href="https://faq.tower.jp/?site_domain=trs">よくあるご質問 (Q&A)</a></div>
+            <div class="mb-1" style="font-size:11.2px;"><a href="https://tower.jp/info">お知らせ</a></div></div>
+        <div class="col-12 col-md-2 mb-2"><div class="font-weight-bold mb-2">
+                規約、その他
+            </div>
+            <div class="mb-1" style="font-size:11.2px;"><a href="https://tower.jp/information/kiyaku">規約</a></div>
+            <div class="mb-1" style="font-size:11.2px;"><a href="https://tower.jp/information/shouhou">特定商取引法に基づく表示</a></div>
+            <div class="mb-1" style="font-size:11.2px;"><a href="https://tower.jp/information/privacy">プライバシーステートメント</a></div></div>
+        <div class="col-12 col-md-2 mb-2"><div class="font-weight-bold mb-2">
+                会社情報
+            </div>
+            <div class="mb-1" style="font-size:11.2px;"><a href="https://tower.jp/company">会社情報</a></div>
+            <div class="mb-1" style="font-size:11.2px;"><a href="https://tower.jp/company/pressrelease">プレスリリース</a></div></div>
+        <div class="col-12 col-md-1"></div></div>
+
+    <div class="row ml-0 mr-0 bg-black"><div class="col-12 text-center p-3 text-white font-weight-bold">
+            &copy; 2026 Tower Records Japan Inc.
+        </div></div></div></footer></div><!--Blazor:{"prerenderId":"cf0ed50a67af4e198801384188f7aa71"}-->
+    </app>
+
+    <div id="blazor-error-ui">
+        
+            アプリケーションでエラーが発生しました。画面をリロードしてください。
+        
+        
+        <a href="" class="reload">リロードする</a>
+        <a class="dismiss">🗙</a>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js" integrity="sha384-Q6E9RHvbIyZFJoft+2mJbHaEWldlvI9IOYy5n3zV9zzTtmI3UksdQRVvoxMfooAo" crossorigin="anonymous"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/js/bootstrap.min.js" integrity="sha384-OgVRvuATP1z7JjHLkuOU7Xw704+h835Lr+6QL9UvYjZE3Ipu6Tp75j7Bh/kR0JKI" crossorigin="anonymous"></script>
+
+    <script src="_content/Blazorise/blazorise.js"></script>
+    <script src="_content/Blazorise.Bootstrap/blazorise.bootstrap.js"></script>
+    <script src="_content/BlazorInputFile/inputfile.js"></script>
+    <script src="_framework/blazor.server.js" autostart="false"></script>
+    <script src="_content/Sve.Blazor.InfiniteScroll/js/Observer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@2.8.0"></script>
+    <script src="_content/Blazorise.Charts/blazorise.charts.js"></script>
+    <script>
+        Blazor.start({
+            reconnectionHandler: {
+                onConnectionDown: () => {
+                    console.log('wait start'),
+                        setTimeout(function () { console.log('wait end') }, 4900),
+                        setTimeout(function () { document.location.reload(true) }, 5000);
+                },
+                onConnectionUp: () => {}
+            }
+        });
+    </script>
+    <script src="_content/Microsoft.AspNetCore.Components.Web.Extensions/headManager.js" type="module"></script>
+</body>
+</html>

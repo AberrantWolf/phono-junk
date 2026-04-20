@@ -9,6 +9,7 @@ members = [
     "phono-junk-itunes",
     "phono-junk-amazon",
     "phono-junk-barcodelookup",
+    "phono-junk-tower",
     "phono-junk-accuraterip",
     "phono-junk-catalog",
     "phono-junk-db",
@@ -39,6 +40,7 @@ phono-junk-discogs = { path = "phono-junk-discogs" }
 phono-junk-itunes = { path = "phono-junk-itunes" }
 phono-junk-amazon = { path = "phono-junk-amazon" }
 phono-junk-barcodelookup = { path = "phono-junk-barcodelookup" }
+phono-junk-tower = { path = "phono-junk-tower" }
 phono-junk-accuraterip = { path = "phono-junk-accuraterip" }
 phono-junk-catalog = { path = "phono-junk-catalog" }
 phono-junk-db = { path = "phono-junk-db" }
@@ -63,6 +65,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 governor = "0.7"
 nonzero_ext = "0.3"
 httpmock = "0.7"
+scraper = "0.20"
 rusqlite = { version = "0.33", features = ["bundled"] }
 dirs = "6"
 chrono = "0.4"

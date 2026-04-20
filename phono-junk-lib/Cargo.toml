@@ -12,6 +12,7 @@ phono-junk-musicbrainz.workspace = true
 phono-junk-itunes.workspace = true
 phono-junk-discogs.workspace = true
 phono-junk-barcodelookup.workspace = true
+phono-junk-tower.workspace = true
 # phono-junk-amazon is deferred post-MVP (see TODO.md): its ASIN entry
 # point depends on Discogs responses; not wired into PhonoContext yet.
 phono-junk-accuraterip.workspace = true

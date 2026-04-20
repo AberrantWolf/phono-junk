@@ -658,6 +658,7 @@ fn first_source(sources: &[String]) -> Option<IdentificationSource> {
         "discogs" => IdentificationSource::Discogs,
         "itunes" => IdentificationSource::ITunes,
         "amazon" => IdentificationSource::Amazon,
+        "tower" => IdentificationSource::Tower,
         other => IdentificationSource::Other(other.to_string()),
     })
 }

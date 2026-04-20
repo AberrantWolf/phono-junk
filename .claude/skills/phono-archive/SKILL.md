@@ -52,7 +52,7 @@ Container parsing lives in the shared `junk-libs-disc` crate (copied from retro-
 
 phono-junk is designed around pluggable providers (trait-based, see `phono-junk-identify`). Day-1 identification providers are MusicBrainz and Discogs; additional sources (VGMdb, Tower Records, Gracenote, CDJapan) land as additional trait impls.
 
-Provider-specific docs belong in a sibling `music-scraping/` skill (not yet written). For now, per-provider notes live inline in the crate source.
+Provider-specific endpoints, auth, rate-limit policy, and scraping selectors live in the sibling [music-scraping/](../music-scraping/SKILL.md) skill.
 
 ## Sources
 
