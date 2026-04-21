@@ -78,16 +78,32 @@ pub struct PhonoApp {
     /// save/clear status). Separate from `phono_ctx.credentials` so the
     /// user can type without committing until they press Save.
     pub settings: crate::views::settings::SettingsState,
+
+    /// In-app audio playback. Lazy-initialised on the first play-button
+    /// click via [`Self::ensure_player`] — that way a device-open failure
+    /// never blocks startup for users who never play a track.
+    pub player: Option<crate::backend::player::Player>,
 }
 
 impl PhonoApp {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel();
-        let phono_ctx = match PhonoContext::with_default_providers(default_user_agent()) {
-            Ok(ctx) => Arc::new(ctx),
-            Err(e) => {
-                log::error!("failed to build default PhonoContext: {e}; falling back to empty ctx");
-                Arc::new(PhonoContext::new())
+        // Under `cargo test`, skip `with_default_providers` entirely — that
+        // code path opens the macOS Keychain (or Secret Service on Linux)
+        // to load provider tokens, which pops a consent prompt for every
+        // test run. Tests that need a context with providers should build
+        // one explicitly. Production callers hit the real branch.
+        let phono_ctx = if cfg!(test) {
+            Arc::new(PhonoContext::new())
+        } else {
+            match PhonoContext::with_default_providers(default_user_agent()) {
+                Ok(ctx) => Arc::new(ctx),
+                Err(e) => {
+                    log::error!(
+                        "failed to build default PhonoContext: {e}; falling back to empty ctx"
+                    );
+                    Arc::new(PhonoContext::new())
+                }
             }
         };
         Self {
@@ -112,7 +128,20 @@ impl PhonoApp {
             message_tx: tx,
             settings_open: false,
             settings: crate::views::settings::SettingsState::default(),
+            player: None,
         }
+    }
+
+    /// Get (or construct on first call) the audio player. Returns a
+    /// boxed error if the backend refused to open — the caller funnels
+    /// that onto `app.load_error` and the button click is a no-op.
+    pub fn ensure_player(
+        &mut self,
+    ) -> Result<&mut crate::backend::player::Player, crate::backend::player::PlayerError> {
+        if self.player.is_none() {
+            self.player = Some(crate::backend::player::Player::new()?);
+        }
+        Ok(self.player.as_mut().expect("player just constructed"))
     }
 
     /// Number of unidentified rip files in the currently-loaded entry list.

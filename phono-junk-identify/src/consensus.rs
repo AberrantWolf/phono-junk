@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 
+use phono_junk_core::Toc;
 use serde::Serialize;
 
 use crate::{AlbumMeta, ProviderResult, ReleaseMeta, TrackMeta};
@@ -279,6 +280,35 @@ pub(crate) fn merge_opt<T: Clone + Eq + std::hash::Hash + Serialize>(
         });
     }
     Some(winner_val)
+}
+
+/// Consensus merge with a TOC-derived fallback for the tracklist.
+///
+/// Runs [`merge`] first; if the resulting `tracks` vector is empty (every
+/// provider returned zero track entries — typical when only a barcode-keyed
+/// provider like Discogs matched), synthesises one stub `TrackMeta` per
+/// TOC entry with `length_frames` populated and all text fields `None`.
+///
+/// The trigger is strictly "no tracks at all". A partial provider return
+/// (e.g. MB lists 2 of 3 tracks) is a distinct failure mode — silently
+/// padding it would hide the bug. See TODO.md's Sprint 19 section for the
+/// partial-return policy follow-up.
+pub fn merge_with_toc_fallback(results: &[ProviderResult], toc: &Toc) -> MergedDisc {
+    let mut merged = merge(results);
+    if merged.tracks.is_empty() {
+        merged.tracks = toc
+            .iter_track_spans()
+            .map(|s| TrackMeta {
+                position: s.position,
+                title: None,
+                artist_credit: None,
+                length_frames: Some(s.length_frames),
+                isrc: None,
+                mbid: None,
+            })
+            .collect();
+    }
+    merged
 }
 
 /// Merge tracks across the cohort, keyed by `position`. Tracks present in

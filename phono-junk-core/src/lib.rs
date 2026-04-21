@@ -46,6 +46,65 @@ pub struct Toc {
     pub track_offsets: Vec<u32>,
 }
 
+/// One row's worth of "which track starts where, and how long is it" —
+/// the primitive shared between TOC rendering and provider-less track stubs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrackSpan {
+    pub position: u8,
+    pub start_sector: u32,
+    pub length_frames: u64,
+}
+
+impl Toc {
+    /// Number of tracks recorded in this TOC.
+    pub fn track_count(&self) -> usize {
+        self.track_offsets.len()
+    }
+
+    /// Length of the `idx`-th track in CD frames (75 per second), derived
+    /// from the next track's start offset or the leadout for the final
+    /// track. Returns `None` when `idx` is out of range.
+    pub fn track_length_frames(&self, idx: usize) -> Option<u64> {
+        let start = *self.track_offsets.get(idx)?;
+        let next = self
+            .track_offsets
+            .get(idx + 1)
+            .copied()
+            .unwrap_or(self.leadout_sector);
+        Some(next.saturating_sub(start) as u64)
+    }
+
+    /// Total disc length in CD frames — leadout minus first track start.
+    pub fn total_length_frames(&self) -> u64 {
+        self.track_offsets
+            .first()
+            .map(|first| self.leadout_sector.saturating_sub(*first) as u64)
+            .unwrap_or(0)
+    }
+
+    /// Iterate per-track spans in TOC order, yielding position (1-indexed
+    /// from [`Toc::first_track`]), start sector, and length in CD frames.
+    pub fn iter_track_spans(&self) -> impl Iterator<Item = TrackSpan> + '_ {
+        self.track_offsets.iter().enumerate().map(|(i, &start)| {
+            let length_frames = self
+                .track_offsets
+                .get(i + 1)
+                .copied()
+                .unwrap_or(self.leadout_sector)
+                .saturating_sub(start) as u64;
+            TrackSpan {
+                position: self.first_track + i as u8,
+                start_sector: start,
+                length_frames,
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/toc_tests.rs"]
+mod toc_tests;
+
 /// All externally-resolvable identifiers derived from a disc's TOC and metadata.
 ///
 /// Different providers key on different IDs: MusicBrainz uses `mb_discid`,

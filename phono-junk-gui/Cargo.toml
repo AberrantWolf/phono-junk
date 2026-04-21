@@ -17,6 +17,7 @@ phono-junk-lib.workspace = true
 phono-junk-core.workspace = true
 phono-junk-catalog.workspace = true
 phono-junk-db.workspace = true
+junk-libs-core.workspace = true
 junk-libs-disc.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 rusqlite.workspace = true
@@ -28,7 +29,9 @@ egui_extras.workspace = true
 # decoder pipeline with no formats and every cover fails as
 # "No matching image loader format \"Jpeg\"".
 image.workspace = true
+kira.workspace = true
 rfd.workspace = true
+thiserror.workspace = true
 log.workspace = true
 env_logger.workspace = true
 serde = { workspace = true, features = ["derive"] }

@@ -18,7 +18,7 @@
 
 use std::path::Path;
 
-use junk_libs_disc::{TrackLayout, TrackPcmReader};
+use junk_libs_disc::TrackPcmReader;
 use phono_junk_core::AudioError;
 
 pub mod client;
@@ -35,24 +35,26 @@ pub use error::AccurateRipError;
 pub use url::{ACCURATERIP_HOST, dbar_url};
 pub use verify::{CrcMatch, TrackVerification, verify_disc, verify_track};
 
-/// Compute AccurateRip CRC v1 and v2 for an audio track in a CUE/BIN image.
+/// Compute AccurateRip CRC v1 and v2 for an audio track in a CUE image.
+/// Handles both single-BIN whole-disc and multi-BIN per-track rips
+/// transparently (see `TrackPcmReader::from_cue`).
 pub fn track_crc_from_cue(
-    bin_path: &Path,
-    layout: &TrackLayout,
+    cue_path: &Path,
+    track_number: u8,
     position: TrackPosition,
 ) -> Result<TrackCrc, AudioError> {
-    let reader = TrackPcmReader::from_bin(bin_path, layout)?;
-    let total_samples = layout.length_sectors * 588;
+    let reader = TrackPcmReader::from_cue(cue_path, track_number)?;
+    let total_samples = reader.total_samples() as u32;
     track_crc_streaming(reader, total_samples, position)
 }
 
 /// Compute AccurateRip CRC v1 and v2 for an audio track in a CHD image.
 pub fn track_crc_from_chd(
     chd_path: &Path,
-    layout: &TrackLayout,
+    track_number: u8,
     position: TrackPosition,
 ) -> Result<TrackCrc, AudioError> {
-    let reader = TrackPcmReader::from_chd(chd_path, layout)?;
-    let total_samples = layout.length_sectors * 588;
+    let reader = TrackPcmReader::from_chd(chd_path, track_number)?;
+    let total_samples = reader.total_samples() as u32;
     track_crc_streaming(reader, total_samples, position)
 }

@@ -14,7 +14,9 @@ pub mod consensus;
 pub mod fanout;
 pub mod http;
 
-pub use consensus::{DisagreementEntity, MergedDisc, RawDisagreement, merge};
+pub use consensus::{
+    DisagreementEntity, MergedDisc, RawDisagreement, merge, merge_with_toc_fallback,
+};
 pub use fanout::{identify_parallel, lookup_assets_parallel, spawn_all};
 pub use http::{HttpClient, HttpClientBuilder, HttpError, HttpResponse};
 
@@ -299,7 +301,7 @@ impl Aggregator {
 
         let any_match = !matches.is_empty();
         let merged = if any_match {
-            consensus::merge(&matches)
+            consensus::merge_with_toc_fallback(&matches, toc)
         } else {
             MergedDisc::default()
         };

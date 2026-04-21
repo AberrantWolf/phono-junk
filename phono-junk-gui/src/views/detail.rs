@@ -40,11 +40,12 @@ use std::path::Path;
 
 use egui::{Color32, Label, RichText, Ui};
 use egui_extras::{Column, TableBuilder};
-use phono_junk_catalog::{Asset, Disagreement, IdentifyAttemptError, RipperProvenance, Track};
+use phono_junk_catalog::{Asset, Disagreement, IdentifyAttemptError, RipperProvenance};
 use phono_junk_lib::{AlbumDetail, DiscDetail, ReleaseDetail, UnidentifiedDetail, audit};
 
 use crate::app::PhonoApp;
 use crate::backend;
+use crate::backend::player::PlaybackId;
 use crate::fonts;
 use crate::state::{DetailCache, DetailPayload, EntryKey};
 use crate::widgets::table_header;
@@ -163,7 +164,7 @@ fn render_album(ui: &mut Ui, app: &mut PhonoApp, detail: &AlbumDetail) {
         ui.separator();
 
         for (idx, release) in detail.releases.iter().enumerate() {
-            release_block(ui, release, idx, detail.releases.len());
+            release_block(ui, app, release, idx, detail.releases.len());
         }
 
         ui.separator();
@@ -244,7 +245,13 @@ fn cover_block(ui: &mut Ui, app: &mut PhonoApp, key: EntryKey, cover_asset: Opti
     );
 }
 
-fn release_block(ui: &mut Ui, release: &ReleaseDetail, idx: usize, total: usize) {
+fn release_block(
+    ui: &mut Ui,
+    app: &mut PhonoApp,
+    release: &ReleaseDetail,
+    idx: usize,
+    total: usize,
+) {
     let label = release_heading(release, idx, total);
     let header_id = ui.make_persistent_id(("release_header", release.release.id));
     egui::collapsing_header::CollapsingState::load_with_default_open(
@@ -276,7 +283,7 @@ fn release_block(ui: &mut Ui, release: &ReleaseDetail, idx: usize, total: usize)
         disagreement_block(ui, "Release", &release.disagreements);
 
         for disc in &release.discs {
-            disc_block(ui, disc, release.discs.len() as u8);
+            disc_block(ui, app, disc, release.discs.len() as u8);
         }
     });
 }
@@ -297,7 +304,7 @@ fn release_heading(release: &ReleaseDetail, idx: usize, total: usize) -> String 
     parts.join(" — ")
 }
 
-fn disc_block(ui: &mut Ui, disc: &DiscDetail, total_discs: u8) {
+fn disc_block(ui: &mut Ui, app: &mut PhonoApp, disc: &DiscDetail, total_discs: u8) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.label(
@@ -334,18 +341,52 @@ fn disc_block(ui: &mut Ui, disc: &DiscDetail, total_discs: u8) {
 
     // Tracks
     if !disc.tracks.is_empty() {
-        track_table(ui, &disc.tracks);
+        track_table(ui, app, disc);
     }
 
     disagreement_block(ui, "Disc", &disc.disagreements);
     ui.add_space(4.0);
 }
 
-fn track_table(ui: &mut Ui, tracks: &[Track]) {
+fn track_table(ui: &mut Ui, app: &mut PhonoApp, disc: &DiscDetail) {
+    let tracks = &disc.tracks;
     let any_artist = tracks.iter().any(|t| t.artist_credit.is_some());
+    let rip_file_id = disc.rip_file.as_ref().map(|r| r.id);
+
+    // All-stubs banner: when every row has no title and no artist, the
+    // tracks came from the TOC fallback, not a provider. Signal it once
+    // above the table rather than styling every row.
+    let all_stubs = tracks
+        .iter()
+        .all(|t| t.title.is_none() && t.artist_credit.is_none());
+    if all_stubs {
+        ui.label(
+            RichText::new("Track titles not provided — TOC layout only.")
+                .italics()
+                .color(Color32::GRAY),
+        );
+    }
+
+    // Snapshot which row (if any) is currently playing for *this rip*.
+    // Copied out of `app` so we aren't trying to hold a read-only borrow
+    // of the player through the TableBuilder closure.
+    let playing_position: Option<u8> = rip_file_id.and_then(|rid| {
+        app.player.as_ref().and_then(|p| {
+            p.currently_playing()
+                .filter(|pid| pid.rip_file_id == rid)
+                .map(|pid| pid.track_position)
+        })
+    });
+
+    // The body closure captures this and sets it on click. We then act
+    // on the click *after* TableBuilder finishes, so `&mut app` isn't
+    // aliased with the widget layout borrows.
+    let mut clicked_position: Option<u8> = None;
+
     TableBuilder::new(ui)
         .id_salt(("disc_tracks", tracks.first().map(|t| t.disc_id).unwrap_or(0)))
         .striped(true)
+        .column(Column::exact(24.0))                   // ▶ / ⏹
         .column(Column::initial(28.0).at_least(24.0)) // #
         .column(Column::remainder().at_least(120.0))   // Title
         .column(Column::initial(64.0))                  // Length
@@ -355,6 +396,7 @@ fn track_table(ui: &mut Ui, tracks: &[Track]) {
             Column::exact(0.0)
         })
         .header(24.0, |mut header| {
+            header.col(|_ui| {});
             header.col(|ui| table_header::static_header(ui, "#"));
             header.col(|ui| table_header::static_header(ui, "Title"));
             header.col(|ui| table_header::static_header(ui, "Length"));
@@ -367,6 +409,17 @@ fn track_table(ui: &mut Ui, tracks: &[Track]) {
         .body(|mut body| {
             for track in tracks {
                 body.row(16.0, |mut tr| {
+                    tr.col(|ui| {
+                        let enabled = rip_file_id.is_some();
+                        let playing = playing_position == Some(track.position);
+                        let label = if playing { "⏹" } else { "▶" };
+                        if ui
+                            .add_enabled(enabled, egui::Button::new(label).small())
+                            .clicked()
+                        {
+                            clicked_position = Some(track.position);
+                        }
+                    });
                     tr.col(|ui| {
                         ui.add(Label::new(track.position.to_string()).truncate());
                     });
@@ -389,6 +442,47 @@ fn track_table(ui: &mut Ui, tracks: &[Track]) {
                 });
             }
         });
+
+    if let Some(position) = clicked_position {
+        handle_play_click(app, disc, position);
+    }
+}
+
+/// A play-button click handler that preempts any currently-playing track
+/// and dispatches to the `Player`. Every failure surfaces on
+/// `app.load_error` — the button never panics and never silently drops
+/// user intent. Non-audio tracks and missing / malformed sources surface
+/// through `open_pcm_reader`'s own error messages, so no duplicate
+/// checking is needed here.
+fn handle_play_click(app: &mut PhonoApp, disc: &DiscDetail, position: u8) {
+    let Some(rip_file) = disc.rip_file.as_ref() else {
+        app.load_error = Some("cannot play: disc has no linked rip file".into());
+        return;
+    };
+
+    let id = PlaybackId {
+        rip_file_id: rip_file.id,
+        track_position: position,
+    };
+    // Toggle: if the clicked row *is* the currently-playing track, stop.
+    if app.player.as_ref().and_then(|p| p.currently_playing()) == Some(id) {
+        if let Some(p) = app.player.as_mut() {
+            p.stop();
+        }
+        return;
+    }
+
+    let rip_file_owned = rip_file.clone();
+    match app.ensure_player() {
+        Ok(player) => {
+            if let Err(e) = player.play_track(id, &rip_file_owned, position) {
+                app.load_error = Some(format!("play: {e}"));
+            }
+        }
+        Err(e) => {
+            app.load_error = Some(format!("audio backend: {e}"));
+        }
+    }
 }
 
 /// 75 frames per second in CDDA. `length_frames` is total frames, including
@@ -507,8 +601,8 @@ fn render_unidentified(ui: &mut Ui, app: &mut PhonoApp, detail: &UnidentifiedDet
         match (detail.toc.as_ref(), detail.toc_error.as_deref()) {
             (Some(toc), _) => {
                 ui.label(RichText::new("Table of contents").strong());
-                let count = toc_track_count(toc);
-                let total = toc_total_frames(toc);
+                let count = toc.track_count();
+                let total = toc.total_length_frames();
                 ui.label(format!(
                     "{} track{}  ·  total {}",
                     count,
@@ -599,28 +693,24 @@ fn toc_table(ui: &mut Ui, toc: &phono_junk_core::Toc, sidecar: &phono_junk_lib::
             }
         })
         .body(|mut body| {
-            for (i, &start) in toc.track_offsets.iter().enumerate() {
-                let track_number = toc.first_track as usize + i;
-                let next = toc
-                    .track_offsets
-                    .get(i + 1)
-                    .copied()
-                    .unwrap_or(toc.leadout_sector);
-                let length_frames = next.saturating_sub(start) as u64;
+            for span in toc.iter_track_spans() {
                 body.row(16.0, |mut tr| {
                     tr.col(|ui| {
-                        ui.add(Label::new(track_number.to_string()).truncate());
+                        ui.add(Label::new(span.position.to_string()).truncate());
                     });
                     tr.col(|ui| {
-                        ui.add(Label::new(format_length(Some(length_frames))).truncate());
+                        ui.add(Label::new(format_length(Some(span.length_frames))).truncate());
                     });
                     tr.col(|ui| {
-                        ui.add(Label::new(start.to_string()).truncate());
+                        ui.add(Label::new(span.start_sector.to_string()).truncate());
                     });
                     if any_title {
                         tr.col(|ui| {
-                            let pos = track_number as u8;
-                            let t = sidecar.cdtext_titles.get(&pos).cloned().unwrap_or_default();
+                            let t = sidecar
+                                .cdtext_titles
+                                .get(&span.position)
+                                .cloned()
+                                .unwrap_or_default();
                             ui.add(Label::new(t).truncate());
                         });
                     } else {
@@ -628,10 +718,9 @@ fn toc_table(ui: &mut Ui, toc: &phono_junk_core::Toc, sidecar: &phono_junk_lib::
                     }
                     if any_performer {
                         tr.col(|ui| {
-                            let pos = track_number as u8;
                             let p = sidecar
                                 .cdtext_performers
-                                .get(&pos)
+                                .get(&span.position)
                                 .cloned()
                                 .unwrap_or_default();
                             ui.add(Label::new(p).truncate());
@@ -678,17 +767,6 @@ fn sidecar_block(ui: &mut Ui, data: &phono_junk_lib::sidecar::SidecarData) {
                 }
             });
     }
-}
-
-fn toc_total_frames(toc: &phono_junk_core::Toc) -> u64 {
-    toc.track_offsets
-        .first()
-        .map(|first| toc.leadout_sector.saturating_sub(*first) as u64)
-        .unwrap_or(0)
-}
-
-fn toc_track_count(toc: &phono_junk_core::Toc) -> usize {
-    toc.track_offsets.len()
 }
 
 fn error_row(ui: &mut Ui, e: &IdentifyAttemptError) {

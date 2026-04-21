@@ -17,6 +17,7 @@ pub mod detail;
 pub mod export;
 pub mod identify;
 pub mod identify_queue;
+pub mod player;
 pub mod scan;
 pub mod verify;
 pub mod worker;

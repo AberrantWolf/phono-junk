@@ -25,7 +25,10 @@ pub use detail::{
     AlbumDetail, DetailError, DiscDetail, ReleaseDetail, UnidentifiedDetail, load_album_detail,
     load_unidentified_detail,
 };
-pub use extract::{ExportError, ExportedDisc, fetch_asset_bytes};
+pub use extract::{
+    ExportError, ExportedDisc, fetch_asset_bytes, find_layout_for_track, load_track_layouts,
+    open_pcm_reader,
+};
 pub use identify::{IdentifiedDisc, IdentifyError};
 pub use list::{
     ListEntry, ListFilters, ListRow, UnidentifiedRow, YearSpec, filter_entries, filter_rows,

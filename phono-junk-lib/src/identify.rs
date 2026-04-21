@@ -98,7 +98,7 @@ impl PhonoContext {
     ) -> Result<IdentifiedDisc, IdentifyError> {
         // Step 1: cache lookup.
         if !force_refresh {
-            if let Some(disc) = find_cached_disc(conn, ids)? {
+            if let Some(disc) = find_disc_by_ids(conn, ids)? {
                 return Ok(cached_outcome(conn, disc, rip_file_id)?);
             }
         }
@@ -112,12 +112,12 @@ impl PhonoContext {
             ids.ar_discid1,
         );
         let outcome: IdentifyOutcome = self.aggregator.identify(toc, ids, &creds);
-        let humanized_errors: Vec<IdentifyAttemptError> = outcome
+        let mut humanized_errors: Vec<IdentifyAttemptError> = outcome
             .errors
             .iter()
             .map(|(name, e)| humanize_provider_error(name, e))
             .collect();
-        let provider_errors: Vec<(String, String)> = humanized_errors
+        let mut provider_errors: Vec<(String, String)> = humanized_errors
             .iter()
             .map(|e| (e.provider.clone(), e.message.clone()))
             .collect();
@@ -148,58 +148,68 @@ impl PhonoContext {
             });
         }
 
-        // Step 5: persist catalog rows. Reuse existing Album by MBID.
         let merged = outcome.merged;
-        let album_id = upsert_album(conn, &merged.album)?;
-        let release_id = upsert_release(conn, album_id, &merged.release)?;
-        let (disc_id, disc_was_reused) = upsert_disc(conn, release_id, toc, ids)?;
-        if disc_was_reused {
-            clear_stale_children(conn, release_id, disc_id)?;
-        }
-        let mut tracks = insert_tracks(conn, disc_id, &merged.tracks)?;
-
-        // Step 6: disagreements.
-        let any_disagreements = !merged.disagreements.is_empty();
-        persist_disagreements(conn, &merged.disagreements, album_id, release_id, &tracks)?;
-
-        // Step 7: apply overrides.
-        let mut album = crud::get_album(conn, album_id)?
-            .ok_or_else(|| IdentifyError::Db(DbError::Migration("album vanished".into())))?;
-        let mut release = crud::get_release(conn, release_id)?
-            .ok_or_else(|| IdentifyError::Db(DbError::Migration("release vanished".into())))?;
-        let mut disc = crud::get_disc(conn, disc_id)?
-            .ok_or_else(|| IdentifyError::Db(DbError::Migration("disc vanished".into())))?;
-        apply_all_overrides(
-            conn,
-            &mut album,
-            &mut release,
-            &mut disc,
-            &mut tracks,
-        )?;
-
-        // Step 8: assets.
         let source = first_source(&merged.sources);
-        let ctx = AssetLookupCtx {
+
+        // Asset fan-out runs BEFORE opening the catalog transaction — it's
+        // HTTP I/O that can take seconds, and we don't want a SQLite write
+        // lock held across it. The candidates are inserted inside the txn.
+        let asset_ctx = AssetLookupCtx {
             album: &merged.album,
             release: &merged.release,
             ids,
             creds: &creds,
         };
-        let asset_outcome = self.aggregator.lookup_assets(&ctx);
-        let asset_count = insert_assets(conn, release_id, &asset_outcome.candidates)?;
-        let mut humanized_errors = humanized_errors;
-        let mut provider_errors = provider_errors;
+        let asset_outcome = self.aggregator.lookup_assets(&asset_ctx);
         for (name, e) in &asset_outcome.errors {
             let h = humanize_provider_error(name, e);
             provider_errors.push((h.provider.clone(), h.message.clone()));
             humanized_errors.push(h);
         }
 
+        // Steps 5–9 run in a single transaction so a mid-pipeline failure
+        // (e.g. UNIQUE violation during disc upsert) rolls back every
+        // partial row instead of stranding an orphan album/release.
+        let txn = conn.unchecked_transaction().map_err(DbError::from)?;
+
+        // Step 5: persist catalog rows. Reuse existing Album by MBID.
+        let album_id = upsert_album(&txn, &merged.album)?;
+        let release_id = upsert_release(&txn, album_id, &merged.release)?;
+        let (disc_id, disc_was_reused) = upsert_disc(&txn, release_id, toc, ids)?;
+        if disc_was_reused {
+            clear_stale_children(&txn, release_id, disc_id)?;
+        }
+        let mut tracks = insert_tracks(&txn, disc_id, &merged.tracks)?;
+
+        // Step 6: disagreements.
+        let any_disagreements = !merged.disagreements.is_empty();
+        persist_disagreements(&txn, &merged.disagreements, album_id, release_id, &tracks)?;
+
+        // Step 7: apply overrides.
+        let mut album = crud::get_album(&txn, album_id)?
+            .ok_or_else(|| IdentifyError::Db(DbError::Migration("album vanished".into())))?;
+        let mut release = crud::get_release(&txn, release_id)?
+            .ok_or_else(|| IdentifyError::Db(DbError::Migration("release vanished".into())))?;
+        let mut disc = crud::get_disc(&txn, disc_id)?
+            .ok_or_else(|| IdentifyError::Db(DbError::Migration("disc vanished".into())))?;
+        apply_all_overrides(
+            &txn,
+            &mut album,
+            &mut release,
+            &mut disc,
+            &mut tracks,
+        )?;
+
+        // Step 8: insert assets (candidates fetched above, pre-txn).
+        let asset_count = insert_assets(&txn, release_id, &asset_outcome.candidates)?;
+
         // Step 9: update rip file (if present).
         if let Some(rf_id) = rip_file_id {
-            update_rip_file(conn, rf_id, disc_id, source.as_ref())?;
+            update_rip_file(&txn, rf_id, disc_id, source.as_ref())?;
         }
-        persist_identify_attempt(conn, rip_file_id, &humanized_errors)?;
+        persist_identify_attempt(&txn, rip_file_id, &humanized_errors)?;
+
+        txn.commit().map_err(DbError::from)?;
 
         Ok(IdentifiedDisc {
             disc_id: Some(disc_id),
@@ -218,7 +228,12 @@ impl PhonoContext {
 // Cache
 // ---------------------------------------------------------------------------
 
-fn find_cached_disc(conn: &Connection, ids: &DiscIds) -> Result<Option<Disc>, DbError> {
+/// Look up an existing disc by any of its TOC-derived IDs. Shared by the
+/// cache-hit path (skip providers entirely) and the re-parent path
+/// (`upsert_disc` on force-refresh) so both agree on what "same disc"
+/// means — the UNIQUE index on `(ar_discid1, ar_discid2, cddb_id)` is
+/// global, so this lookup must be global too.
+fn find_disc_by_ids(conn: &Connection, ids: &DiscIds) -> Result<Option<Disc>, DbError> {
     if let Some(mb) = ids.mb_discid.as_deref() {
         if let Some(disc) = crud::find_disc_by_mb_discid(conn, mb)? {
             return Ok(Some(disc));
@@ -333,14 +348,22 @@ fn upsert_disc(
     toc: &Toc,
     ids: &DiscIds,
 ) -> Result<(Id, bool), DbError> {
-    // Reuse an existing disc under this release with the same disc_number
-    // + mb_discid. For brand-new identifies this is always empty so falls
-    // through to insert. The bool signals "reused, so wipe stale children
-    // before re-inserting."
-    for d in crud::list_discs_for_release(conn, release_id)? {
-        if d.mb_discid == ids.mb_discid && d.disc_number == 1 {
-            return Ok((d.id, true));
+    // A disc's identity lives in its TOC-derived IDs, not the release it
+    // happens to be attached to. On re-identify the providers may route
+    // the disc to a different release than before — if we scoped the
+    // lookup to the new release_id we'd try to INSERT a fresh disc row,
+    // collide with the global UNIQUE (ar_discid1, ar_discid2, cddb_id)
+    // index, and leave the freshly-created album/release orphaned.
+    // Look up globally; if we find the disc under a different release,
+    // re-parent it and sweep the now-empty old release.
+    if let Some(mut existing) = find_disc_by_ids(conn, ids)? {
+        if existing.release_id != release_id {
+            let old_release_id = existing.release_id;
+            existing.release_id = release_id;
+            crud::update_disc(conn, &existing)?;
+            delete_release_if_orphan(conn, old_release_id)?;
         }
+        return Ok((existing.id, true));
     }
     let disc = Disc {
         id: 0,
@@ -356,6 +379,36 @@ fn upsert_disc(
         mcn: None,
     };
     Ok((crud::insert_disc(conn, &disc)?, false))
+}
+
+/// When re-parenting a disc moves it off a release, the old release may
+/// now be empty. Delete it if so, and cascade-clean its album if that
+/// leaves the album empty. Disagreements and overrides are loose-linked
+/// (no FK), so sweep them explicitly; assets cascade via the schema FK.
+fn delete_release_if_orphan(conn: &Connection, release_id: Id) -> Result<(), DbError> {
+    if !crud::list_discs_for_release(conn, release_id)?.is_empty() {
+        return Ok(());
+    }
+    let release = crud::get_release(conn, release_id)?;
+    for d in crud::list_disagreements_for(conn, "Release", release_id)? {
+        crud::delete_disagreement(conn, d.id)?;
+    }
+    for o in crud::list_overrides_for(conn, "Release", release_id)? {
+        crud::delete_override(conn, o.id)?;
+    }
+    crud::delete_release(conn, release_id)?;
+    if let Some(r) = release {
+        if crud::list_releases_for_album(conn, r.album_id)?.is_empty() {
+            for d in crud::list_disagreements_for(conn, "Album", r.album_id)? {
+                crud::delete_disagreement(conn, d.id)?;
+            }
+            for o in crud::list_overrides_for(conn, "Album", r.album_id)? {
+                crud::delete_override(conn, o.id)?;
+            }
+            crud::delete_album(conn, r.album_id)?;
+        }
+    }
+    Ok(())
 }
 
 /// When an identify run reuses an existing disc (force-refresh of a disc

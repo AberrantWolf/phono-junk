@@ -130,14 +130,7 @@ impl PhonoContext {
 
         let mut written: Vec<PathBuf> = Vec::with_capacity(out_paths.len());
         for (track, out_path) in tracks.iter().zip(out_paths.iter()) {
-            let layout = find_layout_for_track(&layouts, track.position)
-                .ok_or_else(|| {
-                    ExtractPrimitiveError::InvalidTrack(format!(
-                        "no layout entry for track position {}",
-                        track.position
-                    ))
-                })?;
-            let pcm = open_pcm_reader(&rip_file, layout)?;
+            let pcm = open_pcm_reader(&rip_file, track.position)?;
             let total_samples = pcm.total_samples();
             let tags = build_track_tags(
                 &album,
@@ -243,7 +236,11 @@ fn build_track_tags(
     }
 }
 
-fn load_track_layouts(rip: &RipFile, disc_id: Id) -> Result<Vec<TrackLayout>, ExportError> {
+/// Reconstruct per-track disc layout from a rip's on-disk source. Exposed
+/// as `pub` so consumers outside the export pipeline — the GUI's inline
+/// playback path, any future CLI `play` — don't re-derive the CUE / CHD
+/// parsing glue.
+pub fn load_track_layouts(rip: &RipFile, disc_id: Id) -> Result<Vec<TrackLayout>, ExportError> {
     if let Some(cue) = rip.cue_path.as_ref() {
         let layout = junk_libs_disc::read_cue_layout(cue)?;
         return Ok(layout);
@@ -255,7 +252,7 @@ fn load_track_layouts(rip: &RipFile, disc_id: Id) -> Result<Vec<TrackLayout>, Ex
     Err(ExportError::NoRipSource(disc_id))
 }
 
-fn find_layout_for_track(layouts: &[TrackLayout], position: u8) -> Option<&TrackLayout> {
+pub fn find_layout_for_track(layouts: &[TrackLayout], position: u8) -> Option<&TrackLayout> {
     layouts.iter().find(|l| l.number == position)
 }
 
@@ -276,24 +273,21 @@ fn verify_layouts_match_tracks(
     Ok(())
 }
 
-fn open_pcm_reader(
+/// Open a `TrackPcmReader` over the rip's CUE or CHD source, positioned at
+/// the start of the track identified by `track_number`. Exposed as `pub`
+/// so the GUI playback path (and any future consumer that wants raw PCM
+/// from a catalogued rip) reuses exactly the export pipeline's source
+/// selection. Delegates to `TrackPcmReader::from_cue` / `from_chd`, which
+/// handle single-BIN and multi-BIN CUE rips uniformly.
+pub fn open_pcm_reader(
     rip: &RipFile,
-    layout: &TrackLayout,
+    track_number: u8,
 ) -> Result<TrackPcmReader, junk_libs_core::AnalysisError> {
     if let Some(chd) = rip.chd_path.as_ref() {
-        return TrackPcmReader::from_chd(chd, layout);
+        return TrackPcmReader::from_chd(chd, track_number);
     }
     if let Some(cue) = rip.cue_path.as_ref() {
-        // When backed by a single-BIN CUE, the first bin_path is the
-        // whole-disc image. If bin_paths is empty (unusual but tolerated
-        // by catalog seeds), fall back to deriving a `.bin` path next to
-        // the CUE — junk_libs_disc will error loudly if that doesn't exist.
-        let bin = rip
-            .bin_paths
-            .first()
-            .cloned()
-            .unwrap_or_else(|| cue.with_extension("bin"));
-        return TrackPcmReader::from_bin(&bin, layout);
+        return TrackPcmReader::from_cue(cue, track_number);
     }
     Err(junk_libs_core::AnalysisError::invalid_format(
         "rip_file has neither cue_path nor chd_path",

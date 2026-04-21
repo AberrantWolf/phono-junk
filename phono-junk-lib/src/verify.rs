@@ -235,10 +235,10 @@ fn compute_track_crc(
     position: TrackPosition,
 ) -> Result<TrackCrc, VerifyError> {
     if let Some(chd) = rip.chd_path.as_ref() {
-        return Ok(track_crc_from_chd(chd, layout, position)?);
+        return Ok(track_crc_from_chd(chd, layout.number, position)?);
     }
     if let Some(cue) = rip.cue_path.as_ref() {
-        return Ok(track_crc_from_cue(cue, layout, position)?);
+        return Ok(track_crc_from_cue(cue, layout.number, position)?);
     }
     Err(VerifyError::NoRipSource(rip.id))
 }

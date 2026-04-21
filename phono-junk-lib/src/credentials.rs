@@ -127,7 +127,16 @@ impl CredentialStore {
     /// is logged and returned as [`CredentialError::Unavailable`] so
     /// the caller can surface a GUI hint if useful — but the in-memory
     /// store remains usable either way.
+    ///
+    /// Respects the `PHONO_SKIP_KEYRING` env var — when set, this is a
+    /// no-op that returns `Ok(())`. Centralised here so every call site
+    /// (GUI startup, CLI subcommands, tests, diagnostics) inherits the
+    /// same opt-out without repeated env-var checks.
     pub fn load_from_keyring(&self) -> Result<(), CredentialError> {
+        if std::env::var_os("PHONO_SKIP_KEYRING").is_some() {
+            log::debug!("credentials: PHONO_SKIP_KEYRING set, skipping keyring load");
+            return Ok(());
+        }
         let mut unavailable: Option<CredentialError> = None;
         for provider in KNOWN_PROVIDERS {
             match keyring::Entry::new(KEYRING_SERVICE, provider) {

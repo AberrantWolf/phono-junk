@@ -596,3 +596,133 @@ fn mbid_split_does_not_mix_track_lists() {
     assert_eq!(tracks.len(), 1);
     assert_eq!(tracks[0].title.as_deref(), Some("Correct Track"));
 }
+
+/// Regression: re-identify that routes the disc to a new release must
+/// re-parent the existing disc row, not INSERT a duplicate. A fresh
+/// insert would collide with the global UNIQUE index on
+/// `(ar_discid1, ar_discid2, cddb_id)`, and before the fix would leave
+/// an orphan album + release behind because catalog writes weren't
+/// transactional.
+#[test]
+fn reidentify_reparents_disc_when_release_changes() {
+    let conn = open_conn();
+
+    // First pass: provider reports album-mbid / release-mbid.
+    let ctx1 = context_with_identifier(MockIdentifier {
+        name: "mb",
+        result: Some(mb_result()),
+    });
+    let first = ctx1
+        .identify_disc(&conn, &sample_toc(), &sample_ids(), None, false)
+        .unwrap();
+    let original_disc_id = first.disc_id.unwrap();
+    let original_release_id = first.release_id.unwrap();
+
+    // Second pass: force refresh, provider now reports different MBIDs
+    // (simulating discogs + tower disagreeing with the original MB hit).
+    let mut alt = mb_result();
+    alt.album.as_mut().unwrap().mbid = Some("other-album-mbid".into());
+    alt.release.as_mut().unwrap().mbid = Some("other-release-mbid".into());
+    let ctx2 = context_with_identifier(MockIdentifier {
+        name: "mb",
+        result: Some(alt),
+    });
+    let second = ctx2
+        .identify_disc(&conn, &sample_toc(), &sample_ids(), None, true)
+        .expect("re-identify must not collide on UNIQUE");
+
+    // Same physical disc, now on the new release.
+    assert_eq!(second.disc_id, Some(original_disc_id));
+    assert_ne!(second.release_id, Some(original_release_id));
+
+    // Old release (and its album, since it had only this one release)
+    // are swept — no orphans left over.
+    let albums = crud::list_albums(&conn).unwrap();
+    assert_eq!(
+        albums.len(),
+        1,
+        "orphan album should be cleaned up, got {albums:?}"
+    );
+    assert!(
+        crud::get_release(&conn, original_release_id)
+            .unwrap()
+            .is_none(),
+        "orphan release should be deleted"
+    );
+}
+
+/// Regression: when the catalog transaction rolls back partway through
+/// (here, via a forced override-application failure), no album or
+/// release row should be left stranded. Before the transaction wrap,
+/// a failure between `upsert_release` and `upsert_disc` committed the
+/// album/release inserts independently.
+#[test]
+fn identify_rolls_back_on_mid_pipeline_failure() {
+    use phono_junk_catalog::Override;
+
+    let conn = open_conn();
+
+    // Pre-seed an override with an invalid sub_path that will fail
+    // during apply — but only once an album with this MBID exists.
+    // The identify pipeline creates album first, then tries to apply
+    // overrides after disc insert; override failure must roll back.
+    //
+    // Pre-seeded override targeting a non-existent entity id won't
+    // trigger — overrides are listed by entity id, and the entity id
+    // won't match until persistence. Easier path: use an override
+    // whose sub_path points at a track that doesn't exist, which
+    // makes apply_override fail inside the transaction.
+    let ctx = context_with_identifier(MockIdentifier {
+        name: "mb",
+        result: Some(mb_result()),
+    });
+    // First, perform a normal identify to get an album/disc id.
+    let first = ctx
+        .identify_disc(&conn, &sample_toc(), &sample_ids(), None, false)
+        .unwrap();
+    let disc_id = first.disc_id.unwrap();
+
+    // Seed a bogus override on the disc that references a track
+    // position out of range. apply_override will error.
+    crud::insert_override(
+        &conn,
+        &Override {
+            id: 0,
+            entity_type: "Disc".into(),
+            entity_id: disc_id,
+            sub_path: Some("track[99]".into()),
+            field: "title".into(),
+            override_value: "\"bad\"".into(),
+            reason: None,
+            created_at: None,
+        },
+    )
+    .unwrap();
+
+    let albums_before = crud::list_albums(&conn).unwrap().len();
+    let releases_before = {
+        let mut n = 0;
+        for a in crud::list_albums(&conn).unwrap() {
+            n += crud::list_releases_for_album(&conn, a.id).unwrap().len();
+        }
+        n
+    };
+
+    // Force-refresh re-runs the pipeline. The bogus override must
+    // cause the transaction to roll back.
+    let err = ctx
+        .identify_disc(&conn, &sample_toc(), &sample_ids(), None, true)
+        .err();
+    assert!(err.is_some(), "bogus override must error identify_disc");
+
+    // No extra rows created.
+    assert_eq!(crud::list_albums(&conn).unwrap().len(), albums_before);
+    let releases_after = {
+        let mut n = 0;
+        for a in crud::list_albums(&conn).unwrap() {
+            n += crud::list_releases_for_album(&conn, a.id).unwrap().len();
+        }
+        n
+    };
+    assert_eq!(releases_after, releases_before);
+}

@@ -1,8 +1,10 @@
 //! Consensus merge behaviour: plurality + priority, MBID cohort, per-track
 //! positional merge.
 
+use phono_junk_core::Toc;
 use phono_junk_identify::{
     AlbumMeta, DisagreementEntity, ProviderResult, ReleaseMeta, TrackMeta, merge,
+    merge_with_toc_fallback,
 };
 
 fn provider_result(
@@ -188,4 +190,80 @@ fn empty_results_returns_default_merged() {
     assert!(m.tracks.is_empty());
     assert!(m.disagreements.is_empty());
     assert!(m.sources.is_empty());
+}
+
+fn toc_3track() -> Toc {
+    Toc {
+        first_track: 1,
+        last_track: 3,
+        leadout_sector: 30_000,
+        track_offsets: vec![150, 10_000, 20_500],
+    }
+}
+
+#[test]
+fn merge_with_toc_fallback_fills_from_toc_when_tracks_empty() {
+    // Mimics a Discogs-only match: album + release metadata populated,
+    // tracks empty. Fallback should synthesise 3 stubs.
+    let discogs_hit = provider_result(
+        "discogs",
+        Some(AlbumMeta {
+            title: Some("8cm Single".into()),
+            artist_credit: Some("Some Artist".into()),
+            year: Some(1995),
+            mbid: None,
+        }),
+        Some(ReleaseMeta {
+            barcode: Some("4945123000185".into()),
+            ..ReleaseMeta::default()
+        }),
+        Vec::new(),
+    );
+
+    let toc = toc_3track();
+    let merged = merge_with_toc_fallback(&[discogs_hit], &toc);
+
+    assert_eq!(merged.tracks.len(), 3);
+    assert_eq!(merged.tracks[0].position, 1);
+    assert_eq!(merged.tracks[0].length_frames, Some(9_850));
+    assert!(merged.tracks[0].title.is_none());
+    assert!(merged.tracks[0].artist_credit.is_none());
+    assert!(merged.tracks[0].isrc.is_none());
+    assert!(merged.tracks[0].mbid.is_none());
+
+    assert_eq!(merged.tracks[2].position, 3);
+    // Last track uses the leadout for its length.
+    assert_eq!(merged.tracks[2].length_frames, Some(9_500));
+
+    // Album/release stay untouched by the fallback.
+    assert_eq!(merged.album.title.as_deref(), Some("8cm Single"));
+}
+
+#[test]
+fn merge_with_toc_fallback_does_not_overwrite_existing_tracks() {
+    // MB returns 2 of 3 tracks (contrived partial return). The fallback
+    // must NOT fire — silently padding would mask the real gap.
+    let mb = provider_result(
+        "musicbrainz",
+        Some(album_with_title("Partial")),
+        None,
+        vec![
+            TrackMeta {
+                position: 1,
+                title: Some("One".into()),
+                ..TrackMeta::default()
+            },
+            TrackMeta {
+                position: 2,
+                title: Some("Two".into()),
+                ..TrackMeta::default()
+            },
+        ],
+    );
+    let toc = toc_3track();
+    let merged = merge_with_toc_fallback(&[mb], &toc);
+
+    assert_eq!(merged.tracks.len(), 2);
+    assert_eq!(merged.tracks[0].title.as_deref(), Some("One"));
+    assert_eq!(merged.tracks[1].title.as_deref(), Some("Two"));
 }
