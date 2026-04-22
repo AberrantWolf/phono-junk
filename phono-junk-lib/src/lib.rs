@@ -26,7 +26,7 @@ pub use detail::{
     load_unidentified_detail,
 };
 pub use extract::{
-    ExportError, ExportedDisc, fetch_asset_bytes, find_layout_for_track, load_track_layouts,
+    ExportError, ExportedDisc, cache_asset_bytes, find_layout_for_track, load_track_layouts,
     open_pcm_reader,
 };
 pub use identify::{IdentifiedDisc, IdentifyError};

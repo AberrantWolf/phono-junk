@@ -24,6 +24,7 @@ use phono_junk_identify::HttpError;
 use rusqlite::Connection;
 
 use crate::PhonoContext;
+use crate::env;
 
 /// Output summary — every file that was written to disk.
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -51,8 +52,6 @@ pub enum ExportError {
         url: String,
         status: u16,
     },
-    #[error("asset {asset_id}: file_path {path} is relative but no library_root is available — cached artwork can't be resolved")]
-    AssetPathUnresolved { asset_id: Id, path: PathBuf },
     #[error("catalog row missing: {0}")]
     MissingRow(&'static str),
     #[error("disc {0} has no linked rip_files row")]
@@ -82,10 +81,12 @@ impl PhonoContext {
     /// Encode every track of `disc_id` into FLAC files under `library_root`,
     /// embed Vorbis tags + front-cover art, and drop a `cover.jpg` sidecar.
     ///
-    /// Cover bytes are fetched on first export and cached under
-    /// `<library_root>/.cache/assets/<asset_id>.<ext>`; the `Asset.file_path`
-    /// column is updated to that location so subsequent exports (or
-    /// re-exports across a moved library) skip the fetch.
+    /// Cover bytes are fetched on first export via [`cache_asset_bytes`] into
+    /// the OS cache dir ([`env::default_asset_cache_dir`]); the `Asset.file_path`
+    /// column is updated to that absolute path so subsequent exports and GUI
+    /// detail-panel views skip the fetch. The cache is process-wide, not
+    /// library-specific — the exported `cover.jpg` sidecar and embedded
+    /// FLAC art are what travel with the library.
     pub fn export_disc(
         &self,
         conn: &Connection,
@@ -123,7 +124,8 @@ impl PhonoContext {
             Some(&album_artist),
         );
 
-        let cover_bytes = resolve_cover_bytes(self, conn, &assets, library_root)?;
+        let cache_dir = resolve_asset_cache_dir(library_root);
+        let cover_bytes = resolve_cover_bytes(self, conn, &assets, &cache_dir)?;
 
         let layouts = load_track_layouts(&rip_file, disc_id)?;
         verify_layouts_match_tracks(&layouts, &tracks, disc_id)?;
@@ -294,6 +296,15 @@ pub fn open_pcm_reader(
     ))
 }
 
+/// Resolve the on-disk cache dir for asset bytes. Prefers the OS cache dir
+/// (via [`env::default_asset_cache_dir`]); falls back to
+/// `<library_root>/.cache/assets` on the rare platforms where `dirs::cache_dir`
+/// returns `None`.
+fn resolve_asset_cache_dir(library_root: &Path) -> PathBuf {
+    env::default_asset_cache_dir()
+        .unwrap_or_else(|| library_root.join(".cache").join("assets"))
+}
+
 /// Pick the front-cover asset, ensure its bytes are locally cached, and
 /// return those bytes. Returns `Ok(None)` if the release has no front
 /// cover at all — export proceeds without embedded art.
@@ -301,42 +312,50 @@ fn resolve_cover_bytes(
     ctx: &PhonoContext,
     conn: &Connection,
     assets: &[Asset],
-    library_root: &Path,
+    cache_dir: &Path,
 ) -> Result<Option<Vec<u8>>, ExportError> {
     let Some(asset) = phono_junk_catalog::pick_front_cover(assets) else {
         return Ok(None);
     };
-    let bytes = ensure_asset_cached(ctx, conn, asset, library_root)?;
+    let bytes = cache_asset_bytes(ctx, conn, asset, cache_dir)?;
     Ok(Some(bytes))
 }
 
-/// Ensure an Asset's bytes exist on disk under `library_root/.cache/assets/`.
-/// If `asset.file_path` already points at a readable file, use it. Otherwise
-/// download via `ctx.http`, persist to a path keyed by asset id, and write
-/// back the relative path to the DB row.
-fn ensure_asset_cached(
+/// Read an [`Asset`]'s bytes from the on-disk cache, downloading and
+/// persisting them first if necessary.
+///
+/// Cache hit: `asset.file_path` points at a readable absolute file → bytes
+/// are read from disk; `ctx.http` and `conn` are untouched. Cache miss:
+/// downloads via `ctx.http.get(source_url)`, writes `<cache_dir>/<id>.<ext>`
+/// atomically (`.tmp` + rename), and updates the `assets` row so the
+/// absolute path is persisted for the next lookup.
+///
+/// Used by both the export pipeline (via [`PhonoContext::export_disc`]) and
+/// the GUI detail-panel cover-fetch worker — same cache, same invalidation
+/// semantics (URL change on the asset row implicitly invalidates).
+pub fn cache_asset_bytes(
     ctx: &PhonoContext,
     conn: &Connection,
     asset: &Asset,
-    library_root: &Path,
+    cache_dir: &Path,
 ) -> Result<Vec<u8>, ExportError> {
-    if let Some(rel_or_abs) = asset.file_path.as_ref() {
-        let candidate = if rel_or_abs.is_absolute() {
-            rel_or_abs.clone()
-        } else {
-            library_root.join(rel_or_abs)
-        };
-        if candidate.exists() {
-            return fs::read(&candidate).map_err(|e| ExportError::io(&candidate, e));
+    if let Some(path) = asset.file_path.as_ref() {
+        if path.is_absolute() && path.exists() {
+            return fs::read(path).map_err(|e| ExportError::io(path.clone(), e));
         }
+        // Absolute-but-missing, or a legacy library-root-relative path left
+        // over from pre-cache-unification DBs: fall through to re-fetch.
     }
-    let http = ctx.http.as_ref().ok_or(ExportError::NoHttpClient)?;
+    // Validate source_url before touching the HTTP client so a malformed
+    // catalog row surfaces a specific error rather than a generic
+    // "no HTTP client" in environments where `ctx.http` is absent.
     let url = asset
         .source_url
         .as_deref()
         .ok_or(ExtractPrimitiveError::InvalidTrack(
-            "front-cover asset has neither file_path nor source_url".into(),
+            "asset has neither file_path nor source_url".into(),
         ))?;
+    let http = ctx.http.as_ref().ok_or(ExportError::NoHttpClient)?;
     let resp = http.get(url)?;
     if !(200..300).contains(&resp.status) {
         return Err(ExportError::AssetFetchStatus {
@@ -346,61 +365,16 @@ fn ensure_asset_cached(
         });
     }
     let ext = cover_extension(&resp.content_type, url);
-    let cache_dir = library_root.join(".cache").join("assets");
-    fs::create_dir_all(&cache_dir).map_err(|e| ExportError::io(&cache_dir, e))?;
+    fs::create_dir_all(cache_dir).map_err(|e| ExportError::io(cache_dir, e))?;
     let filename = format!("{}.{}", asset.id, ext);
     let abs_path = cache_dir.join(&filename);
-    fs::write(&abs_path, &resp.body).map_err(|e| ExportError::io(&abs_path, e))?;
+    let tmp_path = cache_dir.join(format!("{}.{}.tmp", asset.id, ext));
+    fs::write(&tmp_path, &resp.body).map_err(|e| ExportError::io(&tmp_path, e))?;
+    fs::rename(&tmp_path, &abs_path).map_err(|e| ExportError::io(&abs_path, e))?;
 
-    // Persist a library-root-relative path so the library stays portable.
-    let relative = PathBuf::from(".cache").join("assets").join(&filename);
     let mut updated = asset.clone();
-    updated.file_path = Some(relative);
+    updated.file_path = Some(abs_path);
     crud::update_asset(conn, &updated)?;
-    Ok(resp.body)
-}
-
-/// Fetch raw bytes for an asset without persisting them to disk or touching
-/// the catalog. For GUI display surfaces (Sprint 18 detail panel) where the
-/// caller has no `library_root` and just needs bytes for an in-memory image.
-///
-/// Tries `asset.file_path` first if it points at a readable absolute file
-/// (post-export caches land in absolute form on the same machine; relative
-/// `.cache/assets/...` paths can't be resolved without the library root and
-/// fall through to HTTP).
-pub fn fetch_asset_bytes(
-    ctx: &PhonoContext,
-    asset: &Asset,
-) -> Result<Vec<u8>, ExportError> {
-    if let Some(path) = asset.file_path.as_ref() {
-        if path.is_absolute() {
-            if path.exists() {
-                return fs::read(path).map_err(|e| ExportError::io(path.clone(), e));
-            }
-            // Absolute path on record but the file is gone — fall through to
-            // a re-fetch if source_url is present, otherwise surface the miss.
-        } else if asset.source_url.is_none() {
-            return Err(ExportError::AssetPathUnresolved {
-                asset_id: asset.id,
-                path: path.clone(),
-            });
-        }
-    }
-    let http = ctx.http.as_ref().ok_or(ExportError::NoHttpClient)?;
-    let url = asset
-        .source_url
-        .as_deref()
-        .ok_or(ExtractPrimitiveError::InvalidTrack(
-            "asset has neither file_path nor source_url".into(),
-        ))?;
-    let resp = http.get(url)?;
-    if !(200..300).contains(&resp.status) {
-        return Err(ExportError::AssetFetchStatus {
-            asset_id: asset.id,
-            url: url.to_string(),
-            status: resp.status,
-        });
-    }
     Ok(resp.body)
 }
 
@@ -502,5 +476,51 @@ mod tests {
         assert_eq!(cover_extension(&None, "http://x/y.PNG"), "png");
         assert_eq!(cover_extension(&None, "http://x/y.jpeg"), "jpg");
         assert_eq!(cover_extension(&None, "http://x/y"), "jpg");
+    }
+
+    fn mk_asset(id: Id, file_path: Option<PathBuf>, source_url: Option<&str>) -> Asset {
+        Asset {
+            id,
+            release_id: 0,
+            asset_type: phono_junk_catalog::AssetType::FrontCover,
+            group_id: None,
+            sequence: 0,
+            source_url: source_url.map(String::from),
+            file_path,
+            scraped_at: None,
+        }
+    }
+
+    #[test]
+    fn cache_asset_bytes_hit_reads_from_disk_without_http_or_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cached = tmp.path().join("42.jpg");
+        fs::write(&cached, b"bytes-on-disk").unwrap();
+
+        let asset = mk_asset(42, Some(cached.clone()), Some("http://example/none"));
+        let ctx = PhonoContext::new(); // http = None — proves we don't touch the network
+        // An in-memory DB with no schema — a hit must not call update_asset.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+
+        let bytes = cache_asset_bytes(&ctx, &conn, &asset, tmp.path()).unwrap();
+        assert_eq!(bytes, b"bytes-on-disk");
+    }
+
+    #[test]
+    fn cache_asset_bytes_miss_without_source_url_errors_cleanly() {
+        let tmp = tempfile::tempdir().unwrap();
+        // file_path set but points at a missing file, and no URL to re-fetch.
+        let missing = tmp.path().join("99.jpg");
+        let asset = mk_asset(99, Some(missing), None);
+        let ctx = PhonoContext::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+
+        let err = cache_asset_bytes(&ctx, &conn, &asset, tmp.path()).unwrap_err();
+        match err {
+            ExportError::Extract(ExtractPrimitiveError::InvalidTrack(msg)) => {
+                assert!(msg.contains("source_url"), "unexpected msg: {msg}");
+            }
+            other => panic!("expected Extract(InvalidTrack), got {other:?}"),
+        }
     }
 }

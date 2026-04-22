@@ -153,14 +153,14 @@ fn seed_catalog(conn: &Connection, cue: &Path, bin: &Path) -> i64 {
     disc_id
 }
 
-fn seed_cover(conn: &Connection, release_id: i64, library_root: &Path) -> Vec<u8> {
+fn seed_cover(conn: &Connection, release_id: i64, cache_dir: &Path) -> Vec<u8> {
     // Minimal JPEG SOI+APP0 prefix so downstream tooling doesn't balk.
     let cover: Vec<u8> = b"\xFF\xD8\xFF\xE0\x00\x10JFIFfakedata".to_vec();
-    // Pre-cache the bytes and point the Asset row at the cached path, so
-    // the extract path skips HTTP entirely.
-    let rel = PathBuf::from(".cache").join("assets").join("1.jpg");
-    let abs = library_root.join(&rel);
-    fs::create_dir_all(abs.parent().unwrap()).unwrap();
+    // Pre-cache the bytes into the asset cache dir and point the Asset row
+    // at the absolute cached path, so the extract path skips HTTP entirely.
+    // Matches the on-disk shape that `cache_asset_bytes` writes.
+    fs::create_dir_all(cache_dir).unwrap();
+    let abs = cache_dir.join("1.jpg");
     fs::write(&abs, &cover).unwrap();
     let asset = Asset {
         id: 0,
@@ -169,7 +169,7 @@ fn seed_cover(conn: &Connection, release_id: i64, library_root: &Path) -> Vec<u8
         group_id: None,
         sequence: 0,
         source_url: Some("https://example.test/cover.jpg".into()),
-        file_path: Some(rel),
+        file_path: Some(abs),
         scraped_at: None,
     };
     crud::insert_asset(conn, &asset).unwrap();
@@ -189,7 +189,11 @@ fn export_writes_tree_with_tagged_flacs_and_cover() {
     let conn = open_memory().unwrap();
     let disc_id = seed_catalog(&conn, &cue, &bin);
     let release_id = crud::get_disc(&conn, disc_id).unwrap().unwrap().release_id;
-    let cover_bytes = seed_cover(&conn, release_id, &library);
+    // Seed the cover into an isolated cache dir so the test doesn't touch
+    // the real OS cache location. `cache_asset_bytes` hits the absolute
+    // path directly and never reads from `cache_dir` for this row.
+    let cover_cache = tmp.path().join("asset-cache");
+    let cover_bytes = seed_cover(&conn, release_id, &cover_cache);
 
     let ctx = PhonoContext::new();
     let outcome = ctx.export_disc(&conn, disc_id, &library).unwrap();

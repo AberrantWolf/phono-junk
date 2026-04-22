@@ -19,6 +19,19 @@ pub fn default_db_path() -> Option<PathBuf> {
     Some(base.join("phono-junk").join("library.db"))
 }
 
+/// Default on-disk cache for downloaded asset bytes (album art). Returns
+/// `<cache_dir>/phono-junk/assets` (XDG `~/.cache` on Linux, `~/Library/Caches`
+/// on macOS, `%LOCALAPPDATA%` on Windows). Honours the
+/// `PHONO_JUNK_ASSET_CACHE` environment variable as an override — used by
+/// the smoke-test harness to keep fetches hermetic.
+pub fn default_asset_cache_dir() -> Option<PathBuf> {
+    if let Ok(env) = std::env::var("PHONO_JUNK_ASSET_CACHE") {
+        return Some(PathBuf::from(env));
+    }
+    let base = dirs::cache_dir()?;
+    Some(base.join("phono-junk").join("assets"))
+}
+
 /// Default User-Agent for network providers. Honours the
 /// `PHONO_JUNK_USER_AGENT` environment variable as an override. MB
 /// requires a descriptive UA with contact info; the baked-in default

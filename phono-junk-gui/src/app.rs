@@ -5,7 +5,7 @@ use std::sync::mpsc;
 
 use phono_junk_db::crud;
 use phono_junk_lib::PhonoContext;
-use phono_junk_lib::env::{default_db_path, default_user_agent};
+use phono_junk_lib::env::{default_asset_cache_dir, default_db_path, default_user_agent};
 use phono_junk_lib::list::{ListEntry, ListFilters, SortDir, SortKey, load_list_entries};
 use rusqlite::Connection;
 
@@ -89,6 +89,13 @@ pub struct PhonoApp {
     /// shows the dragged value instead of the polled one so the thumb
     /// doesn't fight the user's finger.
     pub scrub_drag: Option<(crate::backend::player::PlaybackId, f64)>,
+
+    /// Directory used for the on-disk byte cache of downloaded asset files
+    /// (cover art). Resolved once at startup from
+    /// [`default_asset_cache_dir`]; cover-fetch workers persist downloaded
+    /// bytes here and update the `assets.file_path` column to the absolute
+    /// cache path so subsequent views hit disk instead of the network.
+    pub asset_cache_dir: Option<PathBuf>,
 }
 
 impl PhonoApp {
@@ -136,6 +143,7 @@ impl PhonoApp {
             settings: crate::views::settings::SettingsState::default(),
             player: None,
             scrub_drag: None,
+            asset_cache_dir: default_asset_cache_dir(),
         }
     }
 

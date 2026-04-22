@@ -234,15 +234,26 @@ fn cover_block(ui: &mut Ui, app: &mut PhonoApp, key: EntryKey, cover_asset: Opti
         }
     };
     if needs_fetch {
-        if let Some(cache) = app.detail_cache.as_mut() {
-            cache.art_loading = true;
+        // Both paths are populated in practice (db_path is set when any
+        // detail payload renders; asset_cache_dir is resolved once at
+        // startup), but fall through cleanly if the platform couldn't
+        // resolve an OS cache dir.
+        if let (Some(db_path), Some(cache_dir)) = (
+            app.db_path.clone(),
+            app.asset_cache_dir.clone(),
+        ) {
+            if let Some(cache) = app.detail_cache.as_mut() {
+                cache.art_loading = true;
+            }
+            backend::detail::spawn_cover_fetch(
+                app.phono_ctx.clone(),
+                app.message_tx.clone(),
+                key,
+                asset.clone(),
+                db_path,
+                cache_dir,
+            );
         }
-        backend::detail::spawn_cover_fetch(
-            app.phono_ctx.clone(),
-            app.message_tx.clone(),
-            key,
-            asset.clone(),
-        );
     }
 
     let (bytes_opt, error_opt) = app
