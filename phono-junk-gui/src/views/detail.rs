@@ -35,6 +35,27 @@
 //!    stale data; cover art appears asynchronously without blocking.
 //! 8. Re-render after a JP-tagged release — title/artist render via the
 //!    CJK_JP font family.
+//!
+//! ## Now-playing strip smoke test
+//!
+//! 1. Play any track (click ▶) — strip appears pinned at the bottom of
+//!    the detail panel; elapsed ticks at ~10 Hz.
+//! 2. Select a different album in the list → detail content changes
+//!    above, strip stays put showing the original track. Deselect the
+//!    row → panel keeps the strip because the player is still active.
+//! 3. Close the detail panel via the toolbar → strip hides with it.
+//!    Re-open → strip returns with position intact.
+//! 4. Drag the slider mid-track → elapsed follows the finger, no audio
+//!    stutter while dragging. On release, playback resumes at the new
+//!    position within ~100 ms.
+//! 5. Click near the end of the slider track without dragging → seeks
+//!    there on release (same drag_stopped path).
+//! 6. Click ⏹ on the strip → playback stops, strip disappears.
+//! 7. Multi-disc album: play disc 1 track 2, then focus a different
+//!    album, then play track 3 there → strip updates to the new track.
+//! 8. Kill the audio daemon / unplug headphones mid-playback → within
+//!    ~200 ms the strip clears (poll_state catches the Stopped state)
+//!    and the row's button flips back to ▶.
 
 use std::path::Path;
 
@@ -45,14 +66,30 @@ use phono_junk_lib::{AlbumDetail, DiscDetail, ReleaseDetail, UnidentifiedDetail,
 
 use crate::app::PhonoApp;
 use crate::backend;
-use crate::backend::player::PlaybackId;
+use crate::backend::player::{PlaybackId, PlaybackMeta};
 use crate::fonts;
 use crate::state::{DetailCache, DetailPayload, EntryKey};
 use crate::widgets::table_header;
 
 pub fn show(ui: &mut Ui, app: &mut PhonoApp) {
+    // Pin the now-playing strip before anything else so it reserves space
+    // at the bottom of the detail panel. Its content reflects the player
+    // state only, independent of which album the panel is focused on —
+    // switching the selection above never orphans or resets the strip.
+    let panel_id = ui.make_persistent_id("detail_now_playing_panel");
+    let strip_visible = app.player.as_ref().and_then(|p| p.now_playing()).is_some();
+    if strip_visible {
+        egui::TopBottomPanel::bottom(panel_id)
+            .resizable(false)
+            .show_inside(ui, |ui| {
+                now_playing_strip(ui, app);
+            });
+    }
+
     let Some(focus) = app.focused_entry else {
-        ui.label("Click a row to view details.");
+        ui.centered_and_justified(|ui| {
+            ui.label("Click a row to view details.");
+        });
         return;
     };
 
@@ -382,6 +419,7 @@ fn track_table(ui: &mut Ui, app: &mut PhonoApp, disc: &DiscDetail) {
     // on the click *after* TableBuilder finishes, so `&mut app` isn't
     // aliased with the widget layout borrows.
     let mut clicked_position: Option<u8> = None;
+    let mut clicked_title: Option<String> = None;
 
     TableBuilder::new(ui)
         .id_salt(("disc_tracks", tracks.first().map(|t| t.disc_id).unwrap_or(0)))
@@ -418,6 +456,7 @@ fn track_table(ui: &mut Ui, app: &mut PhonoApp, disc: &DiscDetail) {
                             .clicked()
                         {
                             clicked_position = Some(track.position);
+                            clicked_title = track.title.clone();
                         }
                     });
                     tr.col(|ui| {
@@ -444,7 +483,7 @@ fn track_table(ui: &mut Ui, app: &mut PhonoApp, disc: &DiscDetail) {
         });
 
     if let Some(position) = clicked_position {
-        handle_play_click(app, disc, position);
+        handle_play_click(app, disc, position, clicked_title);
     }
 }
 
@@ -454,7 +493,12 @@ fn track_table(ui: &mut Ui, app: &mut PhonoApp, disc: &DiscDetail) {
 /// user intent. Non-audio tracks and missing / malformed sources surface
 /// through `open_pcm_reader`'s own error messages, so no duplicate
 /// checking is needed here.
-fn handle_play_click(app: &mut PhonoApp, disc: &DiscDetail, position: u8) {
+fn handle_play_click(
+    app: &mut PhonoApp,
+    disc: &DiscDetail,
+    position: u8,
+    track_title: Option<String>,
+) {
     let Some(rip_file) = disc.rip_file.as_ref() else {
         app.load_error = Some("cannot play: disc has no linked rip file".into());
         return;
@@ -472,10 +516,27 @@ fn handle_play_click(app: &mut PhonoApp, disc: &DiscDetail, position: u8) {
         return;
     }
 
+    // The detail cache is guaranteed to carry this album's payload when
+    // `track_table` runs, so a cache lookup is sufficient — no need to
+    // thread album/artist through the release_block → disc_block chain.
+    let (album_title, album_artist) = match app.detail_cache.as_ref().map(|c| &c.payload) {
+        Some(DetailPayload::Album(album_detail)) => (
+            Some(album_detail.album.title.clone()),
+            album_detail.album.artist_credit.clone(),
+        ),
+        _ => (None, None),
+    };
+    let meta = PlaybackMeta {
+        album_title,
+        album_artist,
+        track_title,
+        disc_number: Some(disc.disc.disc_number),
+    };
+
     let rip_file_owned = rip_file.clone();
     match app.ensure_player() {
         Ok(player) => {
-            if let Err(e) = player.play_track(id, &rip_file_owned, position) {
+            if let Err(e) = player.play_track(id, &rip_file_owned, position, meta) {
                 app.load_error = Some(format!("play: {e}"));
             }
         }
@@ -496,6 +557,117 @@ fn format_length(frames: Option<u64>) -> String {
     let m = secs / 60;
     let s = secs % 60;
     format!("{m}:{s:02}.{rem_frames:02}")
+}
+
+/// Persistent now-playing strip pinned to the bottom of the detail panel.
+/// Reads only from `app.player` — never from the focused entry — so
+/// switching albums above doesn't disturb it.
+fn now_playing_strip(ui: &mut Ui, app: &mut PhonoApp) {
+    // Snapshot the kira-backed fields by value up front, so the drag /
+    // seek handling below can freely take `&mut app.player` and
+    // `&mut app.scrub_drag` without aliasing this borrow.
+    let (id, position_secs, duration_secs, album_title, album_artist, track_title) = {
+        let Some(np) = app.player.as_ref().and_then(|p| p.now_playing()) else {
+            return;
+        };
+        (
+            np.id,
+            np.position_secs,
+            np.duration_secs,
+            np.meta.album_title.clone(),
+            np.meta.album_artist.clone(),
+            np.meta.track_title.clone(),
+        )
+    };
+
+    let duration_secs = duration_secs.max(0.001);
+    let track_position = id.track_position;
+
+    let drag_value = match app.scrub_drag {
+        Some((drag_id, v)) if drag_id == id => Some(v),
+        _ => None,
+    };
+
+    ui.add_space(4.0);
+    // Row 1: album/artist header + stop button.
+    ui.horizontal(|ui| {
+        let header = match (album_artist.as_deref(), album_title.as_deref()) {
+            (Some(a), Some(t)) => format!("{a} — {t}"),
+            (None, Some(t)) => t.to_string(),
+            (Some(a), None) => a.to_string(),
+            (None, None) => String::new(),
+        };
+        ui.label(RichText::new(&header).weak());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("⏹").on_hover_text("Stop").clicked() {
+                if let Some(p) = app.player.as_mut() {
+                    p.stop();
+                }
+                app.scrub_drag = None;
+            }
+        });
+    });
+
+    // Row 2: track label + elapsed + slider (expanded) + total.
+    ui.horizontal(|ui| {
+        let track_label = match track_title.as_deref() {
+            Some(t) if !t.is_empty() => format!("#{track_position}. {t}"),
+            _ => format!("#{track_position}"),
+        };
+        ui.add(Label::new(RichText::new(&track_label).small()).truncate());
+    });
+    ui.horizontal(|ui| {
+        let mut slider_value = drag_value
+            .unwrap_or(position_secs)
+            .clamp(0.0, duration_secs);
+        let elapsed_frames = (slider_value * 75.0).round() as u64;
+        let total_frames = (duration_secs * 75.0).round() as u64;
+
+        ui.label(
+            RichText::new(format_length(Some(elapsed_frames)))
+                .monospace()
+                .small(),
+        );
+
+        // Slider fills whatever horizontal space is left after both
+        // labels are reserved. 72 px on the right covers the widest
+        // `MM:SS.FF` label comfortably.
+        let right_label_width = 72.0_f32;
+        let slider_width = (ui.available_width() - right_label_width).max(40.0);
+        ui.spacing_mut().slider_width = slider_width;
+        let slider_resp = ui.add(
+            egui::Slider::new(&mut slider_value, 0.0..=duration_secs).show_value(false),
+        );
+
+        ui.label(
+            RichText::new(format_length(Some(total_frames)))
+                .monospace()
+                .small(),
+        );
+
+        if slider_resp.drag_started() {
+            app.scrub_drag = Some((id, slider_value));
+        }
+        if slider_resp.dragged() {
+            if let Some(d) = app.scrub_drag.as_mut() {
+                if d.0 == id {
+                    d.1 = slider_value;
+                }
+            }
+        }
+        if slider_resp.drag_stopped() {
+            if let Some(p) = app.player.as_mut() {
+                let _ = p.seek(id, slider_value);
+            }
+            app.scrub_drag = None;
+        }
+    });
+    ui.add_space(4.0);
+
+    // 10 Hz repaint while the strip is up — matches the identification
+    // spinner's cadence (see views/album_list.rs).
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(100));
 }
 
 fn disagreement_block(ui: &mut Ui, _entity_label: &str, disagreements: &[Disagreement]) {

@@ -7,11 +7,6 @@
 //! `u32` layout for playback — AccurateRip does it separately for CRC
 //! math. Kira's renderer handles resampling from 44.1 kHz to the device
 //! rate on its own thread, so the adapter never has to.
-//!
-//! Seek is unsupported in v1: `TrackPcmReader` has no seek method and
-//! we don't scrub today. A future upstream change in `junk-libs-disc`
-//! will turn this into a real implementation; the test
-//! `seek_is_unsupported` pins the current contract as a tripwire.
 
 use junk_libs_disc::{PCM_SAMPLES_PER_SECTOR, TrackPcmReader};
 use kira::Frame;

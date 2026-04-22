@@ -83,6 +83,12 @@ pub struct PhonoApp {
     /// click via [`Self::ensure_player`] — that way a device-open failure
     /// never blocks startup for users who never play a track.
     pub player: Option<crate::backend::player::Player>,
+
+    /// In-flight scrub drag state: `Some((id, position_secs))` while the
+    /// user holds the now-playing slider, cleared on release. The view
+    /// shows the dragged value instead of the polled one so the thumb
+    /// doesn't fight the user's finger.
+    pub scrub_drag: Option<(crate::backend::player::PlaybackId, f64)>,
 }
 
 impl PhonoApp {
@@ -129,6 +135,7 @@ impl PhonoApp {
             settings_open: false,
             settings: crate::views::settings::SettingsState::default(),
             player: None,
+            scrub_drag: None,
         }
     }
 
@@ -417,6 +424,21 @@ impl eframe::App for PhonoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         while let Ok(msg) = self.message_rx.try_recv() {
             handle_message(self, msg, ctx);
+        }
+
+        // Single poll per frame: catches natural end-of-track, audio
+        // device disconnects, and explicit stops alike — if the handle
+        // has transitioned to Stopped we drop `current`, and the now-
+        // playing strip disappears on the next render pass. The drag
+        // buffer gets invalidated when the currently-playing id changes
+        // (or goes away), so a release into a stale id isn't sent.
+        let playing_before = self.player.as_ref().and_then(|p| p.currently_playing());
+        if let Some(player) = self.player.as_mut() {
+            player.poll_state();
+        }
+        let playing_after = self.player.as_ref().and_then(|p| p.currently_playing());
+        if playing_before != playing_after {
+            self.scrub_drag = None;
         }
 
         // Bottom panels stack outermost-first, so the status bar (mounted

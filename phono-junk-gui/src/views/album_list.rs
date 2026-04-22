@@ -86,7 +86,16 @@ pub fn show(ui: &mut Ui, app: &mut PhonoApp) {
     // scrollbar show when the table outgrows the remaining space.
     // `show_inside` must be called before the table so egui can claim
     // the right-side column before laying out the remainder.
-    if app.detail_open && app.focused_entry.is_some() {
+    //
+    // A live playback session also keeps the panel mounted so the
+    // now-playing strip (rendered at its bottom) survives navigating
+    // away from the album that started the track.
+    let now_playing_active = app
+        .player
+        .as_ref()
+        .and_then(|p| p.now_playing())
+        .is_some();
+    if app.detail_open && (app.focused_entry.is_some() || now_playing_active) {
         egui::SidePanel::right("detail_panel")
             .resizable(true)
             .default_width(420.0)
