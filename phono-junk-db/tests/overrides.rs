@@ -1,6 +1,8 @@
 use phono_junk_catalog::{Album, Disc, Override, Release, RipFile, Track};
 use phono_junk_core::{IdentificationConfidence, IdentificationState};
-use phono_junk_db::overrides::{OverrideError, OverrideTarget, apply, apply_override, parse_sub_path};
+use phono_junk_db::overrides::{
+    OverrideError, OverrideTarget, apply, apply_override, parse_sub_path,
+};
 
 fn album() -> Album {
     Album {
@@ -128,7 +130,14 @@ fn track_index_out_of_range() {
         "X",
     )
     .unwrap_err();
-    assert!(matches!(err, OverrideError::IndexOutOfRange { index: 5, len: 2, .. }));
+    assert!(matches!(
+        err,
+        OverrideError::IndexOutOfRange {
+            index: 5,
+            len: 2,
+            ..
+        }
+    ));
 }
 
 #[test]

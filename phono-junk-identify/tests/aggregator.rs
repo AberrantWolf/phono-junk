@@ -3,7 +3,7 @@
 
 use phono_junk_core::{DiscIds, Toc};
 use phono_junk_identify::{
-    AlbumMeta, Aggregator, AssetCandidate, AssetConfidence, AssetLookupCtx, AssetProvider,
+    Aggregator, AlbumMeta, AssetCandidate, AssetConfidence, AssetLookupCtx, AssetProvider,
     AssetType, Credentials, DiscIdKind, IdentificationProvider, ProviderError, ProviderResult,
     ReleaseMeta,
 };

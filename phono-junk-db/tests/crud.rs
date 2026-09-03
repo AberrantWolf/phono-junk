@@ -194,7 +194,11 @@ fn track_round_trip_and_cascade() {
     assert_eq!(tracks[1].position, 2);
 
     crud::delete_disc(&conn, disc_id).unwrap();
-    assert!(crud::list_tracks_for_disc(&conn, disc_id).unwrap().is_empty());
+    assert!(
+        crud::list_tracks_for_disc(&conn, disc_id)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -205,7 +209,10 @@ fn rip_file_round_trip() {
 
     let got = crud::get_rip_file(&conn, id).unwrap().unwrap();
     assert_eq!(got.bin_paths.len(), 1);
-    assert_eq!(got.identification_confidence, IdentificationConfidence::Certain);
+    assert_eq!(
+        got.identification_confidence,
+        IdentificationConfidence::Certain
+    );
     assert!(matches!(
         got.identification_source,
         Some(IdentificationSource::MusicBrainz)
@@ -230,11 +237,17 @@ fn find_rip_file_for_disc_picks_earliest() {
     let second_id = crud::insert_rip_file(&conn, &second).unwrap();
     assert!(second_id > first_id);
 
-    let got = crud::find_rip_file_for_disc(&conn, disc_id).unwrap().unwrap();
+    let got = crud::find_rip_file_for_disc(&conn, disc_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(got.id, first_id);
 
     // No match → None.
-    assert!(crud::find_rip_file_for_disc(&conn, 9_999).unwrap().is_none());
+    assert!(
+        crud::find_rip_file_for_disc(&conn, 9_999)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -384,13 +397,7 @@ fn end_to_end_identify_flow() {
     let rip_id = cache::upsert_rip_file(&conn, &rip).unwrap();
 
     let cue_path = rip.cue_path.as_deref().unwrap();
-    let hit = cache::lookup_cached(
-        &conn,
-        cue_path,
-        rip.mtime.unwrap(),
-        rip.size.unwrap(),
-    )
-    .unwrap();
+    let hit = cache::lookup_cached(&conn, cue_path, rip.mtime.unwrap(), rip.size.unwrap()).unwrap();
     assert!(hit.is_some());
     assert_eq!(hit.unwrap().id, rip_id);
 }
@@ -436,7 +443,11 @@ fn rip_file_provenance_round_trips() {
         }),
         read_offset: Some(6),
         log_path: PathBuf::from("/rips/album.log"),
-        rip_date: Some(chrono::Utc.with_ymd_and_hms(2024, 1, 15, 14, 23, 45).unwrap()),
+        rip_date: Some(
+            chrono::Utc
+                .with_ymd_and_hms(2024, 1, 15, 14, 23, 45)
+                .unwrap(),
+        ),
     };
 
     let mut rip = sample_rip_file(Some(disc_id));
@@ -481,7 +492,10 @@ fn identification_state_round_trips_and_targeted_update_works() {
     let id = crud::insert_rip_file(&conn, &sample_rip_file(None)).unwrap();
 
     let loaded = crud::get_rip_file(&conn, id).unwrap().unwrap();
-    assert_eq!(loaded.identification_state, IdentificationState::Unidentified);
+    assert_eq!(
+        loaded.identification_state,
+        IdentificationState::Unidentified
+    );
 
     crud::set_rip_file_identification_state(
         &conn,

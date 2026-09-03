@@ -72,34 +72,40 @@ impl PhonoContext {
             // Tower MDB is a scrape target — 1 request per 2 seconds.
             .host_quota(
                 "mdb.tower.jp",
-                Quota::with_period(Duration::from_secs(2))
-                    .expect("2s period is non-zero"),
+                Quota::with_period(Duration::from_secs(2)).expect("2s period is non-zero"),
             )
             .host_quota(ACCURATERIP_HOST, Quota::per_second(nonzero!(1u32)))
             .build()?;
 
         let mut ctx = Self::new();
-        ctx.aggregator
-            .register_identifier(Box::new(phono_junk_musicbrainz::MusicBrainzProvider::with_client(http.clone())));
+        ctx.aggregator.register_identifier(Box::new(
+            phono_junk_musicbrainz::MusicBrainzProvider::with_client(http.clone()),
+        ));
         ctx.aggregator.register_asset_provider(Box::new(
             phono_junk_musicbrainz::CoverArtArchiveProvider::with_client(http.clone()),
         ));
-        ctx.aggregator
-            .register_asset_provider(Box::new(phono_junk_itunes::ITunesProvider::with_client(http.clone())));
+        ctx.aggregator.register_asset_provider(Box::new(
+            phono_junk_itunes::ITunesProvider::with_client(http.clone()),
+        ));
         // Discogs implements both traits on one struct. Box twice so each
         // aggregator slot has its own owned pointer.
-        ctx.aggregator
-            .register_identifier(Box::new(phono_junk_discogs::DiscogsProvider::with_client(http.clone())));
-        ctx.aggregator
-            .register_asset_provider(Box::new(phono_junk_discogs::DiscogsProvider::with_client(http.clone())));
+        ctx.aggregator.register_identifier(Box::new(
+            phono_junk_discogs::DiscogsProvider::with_client(http.clone()),
+        ));
+        ctx.aggregator.register_asset_provider(Box::new(
+            phono_junk_discogs::DiscogsProvider::with_client(http.clone()),
+        ));
         // Tower Records Japan MDB — HTML-scraped fallback for
         // domestic-JP pressings that Discogs/MB routinely miss.
         // Registered after Discogs so consensus ties favour the JSON
         // providers; Tower contributes only when they return nothing.
         ctx.aggregator
-            .register_identifier(Box::new(phono_junk_tower::TowerProvider::with_client(http.clone())));
-        ctx.aggregator
-            .register_asset_provider(Box::new(phono_junk_tower::TowerProvider::with_client(http.clone())));
+            .register_identifier(Box::new(phono_junk_tower::TowerProvider::with_client(
+                http.clone(),
+            )));
+        ctx.aggregator.register_asset_provider(Box::new(
+            phono_junk_tower::TowerProvider::with_client(http.clone()),
+        ));
         // Barcode Lookup — final fallback. Registered after Tower so
         // consensus registration-order ties favour the music-specific
         // databases. Same dual-trait / double-box pattern as Discogs.

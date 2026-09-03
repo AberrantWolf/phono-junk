@@ -172,10 +172,7 @@ impl PhonoContext {
     }
 }
 
-fn resolve_target(
-    conn: &Connection,
-    target: VerifyTarget,
-) -> Result<(Disc, RipFile), VerifyError> {
+fn resolve_target(conn: &Connection, target: VerifyTarget) -> Result<(Disc, RipFile), VerifyError> {
     match target {
         VerifyTarget::DiscId(id) => {
             let disc = crud::get_disc(conn, id)?.ok_or(VerifyError::MissingDisc(id))?;

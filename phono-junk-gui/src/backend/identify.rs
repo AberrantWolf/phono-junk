@@ -103,8 +103,7 @@ fn reidentify_one(
     // catalog_number lives on the release. Previously these were hardcoded
     // to `None` and every re-identify silently skipped Discogs.
     let barcode = disc.mcn.clone();
-    let catalog_number = crud::get_release(conn, disc.release_id)?
-        .and_then(|r| r.catalog_number);
+    let catalog_number = crud::get_release(conn, disc.release_id)?.and_then(|r| r.catalog_number);
     let ids = DiscIds {
         mb_discid: disc.mb_discid.clone(),
         cddb_id: disc.cddb_id.clone(),

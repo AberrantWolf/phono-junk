@@ -21,10 +21,7 @@ use tempfile::TempDir;
 /// Build an iterator of `n` sectors whose samples follow `f(i)` for the
 /// i-th stereo sample across the whole track. Returns samples as
 /// `(left_i16, right_i16)` pairs packed into the CDDA `PcmSector` layout.
-fn synth_sectors(
-    n_sectors: usize,
-    mut f: impl FnMut(usize) -> (i16, i16),
-) -> Vec<PcmSector> {
+fn synth_sectors(n_sectors: usize, mut f: impl FnMut(usize) -> (i16, i16)) -> Vec<PcmSector> {
     let mut out = Vec::with_capacity(n_sectors);
     let mut global = 0usize;
     for _ in 0..n_sectors {
@@ -68,9 +65,7 @@ fn silence_roundtrips_bit_exact_with_tags_and_cover() {
     let cover: Vec<u8> = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]; // JPEG magic prefix
     let tags = sample_tags();
 
-    let iter = sectors
-        .into_iter()
-        .map(Ok::<PcmSector, AnalysisError>);
+    let iter = sectors.into_iter().map(Ok::<PcmSector, AnalysisError>);
 
     encode_flac_track(iter, total_samples, &tags, Some(&cover), &out).unwrap();
 
@@ -79,7 +74,11 @@ fn silence_roundtrips_bit_exact_with_tags_and_cover() {
     assert_eq!(info.channels, 2, "channels");
     assert_eq!(info.sample_rate, 44_100, "sample rate");
     assert_eq!(info.bits_per_sample, 16, "bits per sample");
-    assert_eq!(info.samples, Some(total_samples), "total samples in STREAMINFO");
+    assert_eq!(
+        info.samples,
+        Some(total_samples),
+        "total samples in STREAMINFO"
+    );
 
     let mut decoded = 0u64;
     for result in reader.samples() {
@@ -120,9 +119,7 @@ fn sine_wave_survives_encode_decode() {
         })
         .collect();
 
-    let iter = sectors
-        .into_iter()
-        .map(Ok::<PcmSector, AnalysisError>);
+    let iter = sectors.into_iter().map(Ok::<PcmSector, AnalysisError>);
     encode_flac_track(iter, total_samples, &tags, None, &out).unwrap();
 
     let mut reader = FlacReader::open(&out).unwrap();
@@ -141,9 +138,7 @@ fn tags_and_picture_land_in_output_file() {
     let cover: Vec<u8> = b"\xFF\xD8\xFF\xE0fakejpegdata".to_vec();
     let tags = sample_tags();
 
-    let iter = sectors
-        .into_iter()
-        .map(Ok::<PcmSector, AnalysisError>);
+    let iter = sectors.into_iter().map(Ok::<PcmSector, AnalysisError>);
     encode_flac_track(iter, total_samples, &tags, Some(&cover), &out).unwrap();
 
     let tag = Tag::read_from_path(&out).unwrap();
@@ -177,14 +172,10 @@ fn no_cover_means_no_picture_block() {
     let total_samples = PCM_SAMPLES_PER_SECTOR as u64;
     let tags = sample_tags();
 
-    let iter = sectors
-        .into_iter()
-        .map(Ok::<PcmSector, AnalysisError>);
+    let iter = sectors.into_iter().map(Ok::<PcmSector, AnalysisError>);
     encode_flac_track(iter, total_samples, &tags, None, &out).unwrap();
 
     let tag = Tag::read_from_path(&out).unwrap();
-    let any_picture = tag
-        .blocks()
-        .any(|b| matches!(b, Block::Picture(_)));
+    let any_picture = tag.blocks().any(|b| matches!(b, Block::Picture(_)));
     assert!(!any_picture, "no cover supplied → no picture block");
 }

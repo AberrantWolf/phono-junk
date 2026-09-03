@@ -72,8 +72,7 @@ pub enum DetailError {
 /// queries — fine at MVP catalog sizes; lift to a worker only if a profile
 /// proves it hot.
 pub fn load_album_detail(conn: &Connection, album_id: Id) -> Result<AlbumDetail, DetailError> {
-    let album = crud::get_album(conn, album_id)?
-        .ok_or(DetailError::AlbumMissing(album_id))?;
+    let album = crud::get_album(conn, album_id)?.ok_or(DetailError::AlbumMissing(album_id))?;
     let releases_raw = crud::list_releases_for_album(conn, album_id)?;
     let mut releases = Vec::with_capacity(releases_raw.len());
     for release in releases_raw {

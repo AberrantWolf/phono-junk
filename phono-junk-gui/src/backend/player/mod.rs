@@ -88,8 +88,7 @@ impl Player {
     /// click is still a worthwhile convenience so users who never click
     /// play don't pay the cost.
     pub fn new() -> Result<Self, PlayerError> {
-        let mut manager =
-            AudioManager::<DefaultBackend>::new(AudioManagerSettings::default())?;
+        let mut manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default())?;
         let music_track = manager
             .add_sub_track(TrackBuilder::new())
             .map_err(|e| PlayerError::TrackBuild(format!("{e:?}")))?;

@@ -52,9 +52,7 @@ fn round_trips_barcode_hit_through_client_and_parser() {
     });
 
     let client = test_client();
-    let url = server.url(
-        "/v3/products?barcode=0123456789012&formatted=y&key=integration-secret",
-    );
+    let url = server.url("/v3/products?barcode=0123456789012&formatted=y&key=integration-secret");
     let resp = client.get(&url).unwrap();
     assert_eq!(resp.status, 200);
 
@@ -76,7 +74,10 @@ fn round_trips_barcode_hit_through_client_and_parser() {
     // aren't stored on the response today; this guards against a
     // future regression that would echo the request URL back.
     let dbg = format!("{:?}", resp);
-    assert!(!dbg.contains("integration-secret"), "resp debug leaked: {dbg}");
+    assert!(
+        !dbg.contains("integration-secret"),
+        "resp debug leaked: {dbg}"
+    );
 }
 
 #[test]

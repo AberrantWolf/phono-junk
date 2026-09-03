@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use junk_libs_disc::redumper::{DriveInfo, Ripper};
 use phono_junk_catalog::{
-    Album, Asset, AssetType, Disagreement, Disc, Id, IdentifyAttemptError, LibraryFolder,
-    Override, Release, RipFile, RipperProvenance, Track,
+    Album, Asset, AssetType, Disagreement, Disc, Id, IdentifyAttemptError, LibraryFolder, Override,
+    Release, RipFile, RipperProvenance, Track,
 };
 use phono_junk_core::{IdentificationConfidence, IdentificationSource, IdentificationState, Toc};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -97,7 +97,9 @@ fn row_to_album(row: &Row) -> rusqlite::Result<Album> {
         .as_deref()
         .map(|s| serde_json::from_str(s))
         .transpose()
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?
         .unwrap_or_default();
     Ok(Album {
         id: row.get("id")?,
@@ -235,9 +237,7 @@ pub fn insert_release(conn: &Connection, release: &Release) -> Result<Id, DbErro
 
 pub fn get_release(conn: &Connection, id: Id) -> Result<Option<Release>, DbError> {
     let sql = format!("SELECT {RELEASE_COLS} FROM releases WHERE id = ?1");
-    Ok(conn
-        .query_row(&sql, [id], row_to_release)
-        .optional()?)
+    Ok(conn.query_row(&sql, [id], row_to_release).optional()?)
 }
 
 pub fn update_release(conn: &Connection, release: &Release) -> Result<(), DbError> {
@@ -269,9 +269,7 @@ pub fn delete_release(conn: &Connection, id: Id) -> Result<(), DbError> {
 }
 
 pub fn list_releases_for_album(conn: &Connection, album_id: Id) -> Result<Vec<Release>, DbError> {
-    let sql = format!(
-        "SELECT {RELEASE_COLS} FROM releases WHERE album_id = ?1 ORDER BY id"
-    );
+    let sql = format!("SELECT {RELEASE_COLS} FROM releases WHERE album_id = ?1 ORDER BY id");
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([album_id], row_to_release)?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -281,8 +279,7 @@ pub fn list_releases_for_album(conn: &Connection, album_id: Id) -> Result<Vec<Re
 // Disc
 // ---------------------------------------------------------------------------
 
-const DISC_COLS: &str =
-    "id, release_id, disc_number, format, toc_json, \
+const DISC_COLS: &str = "id, release_id, disc_number, format, toc_json, \
      mb_discid, cddb_id, ar_discid1, ar_discid2, dbar_raw, mcn";
 
 fn row_to_disc(row: &Row) -> rusqlite::Result<Disc> {
@@ -291,7 +288,9 @@ fn row_to_disc(row: &Row) -> rusqlite::Result<Disc> {
         .as_deref()
         .map(serde_json::from_str)
         .transpose()
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?;
     let disc_number: i64 = row.get("disc_number")?;
     Ok(Disc {
         id: row.get("id")?,
@@ -365,18 +364,14 @@ pub fn delete_disc(conn: &Connection, id: Id) -> Result<(), DbError> {
 }
 
 pub fn list_discs_for_release(conn: &Connection, release_id: Id) -> Result<Vec<Disc>, DbError> {
-    let sql = format!(
-        "SELECT {DISC_COLS} FROM discs WHERE release_id = ?1 ORDER BY disc_number, id"
-    );
+    let sql =
+        format!("SELECT {DISC_COLS} FROM discs WHERE release_id = ?1 ORDER BY disc_number, id");
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([release_id], row_to_disc)?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-pub fn find_disc_by_mb_discid(
-    conn: &Connection,
-    mb_discid: &str,
-) -> Result<Option<Disc>, DbError> {
+pub fn find_disc_by_mb_discid(conn: &Connection, mb_discid: &str) -> Result<Option<Disc>, DbError> {
     let sql = format!("SELECT {DISC_COLS} FROM discs WHERE mb_discid = ?1 LIMIT 1");
     Ok(conn.query_row(&sql, [mb_discid], row_to_disc).optional()?)
 }
@@ -513,8 +508,7 @@ pub fn list_tracks_for_disc(conn: &Connection, disc_id: Id) -> Result<Vec<Track>
 /// Single source of truth for the rip_files SELECT column list — keeps the
 /// five callers (get/find_by_cue/find_by_chd/find_for_disc/list_unidentified)
 /// from drifting when fields are added.
-const RIP_FILE_COLUMNS: &str =
-    "id, disc_id, cue_path, chd_path, bin_paths_json, mtime, size, \
+const RIP_FILE_COLUMNS: &str = "id, disc_id, cue_path, chd_path, bin_paths_json, mtime, size, \
      identification_confidence, identification_source, accuraterip_status, \
      last_verified_at, last_identify_errors, last_identify_at, \
      identification_state, last_state_change_at";
@@ -529,7 +523,10 @@ fn row_to_rip_file(row: &Row) -> rusqlite::Result<RipFile> {
         rusqlite::Error::FromSqlConversionFailure(
             0,
             rusqlite::types::Type::Text,
-            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e.to_string(),
+            )),
         )
     })?;
     let source_str: Option<String> = row.get("identification_source")?;
@@ -541,7 +538,10 @@ fn row_to_rip_file(row: &Row) -> rusqlite::Result<RipFile> {
             rusqlite::Error::FromSqlConversionFailure(
                 0,
                 rusqlite::types::Type::Text,
-                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    e.to_string(),
+                )),
             )
         })?;
     let errors_str: Option<String> = row.get("last_identify_errors")?;
@@ -550,11 +550,7 @@ fn row_to_rip_file(row: &Row) -> rusqlite::Result<RipFile> {
         .map(serde_json::from_str::<Vec<IdentifyAttemptError>>)
         .transpose()
         .map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(
-                0,
-                rusqlite::types::Type::Text,
-                Box::new(e),
-            )
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
         })?;
     let state_str: String = row.get("identification_state")?;
     let identification_state = IdentificationState::from_str_db(&state_str).ok_or_else(|| {
@@ -608,7 +604,10 @@ fn row_to_provenance(row: &Row) -> rusqlite::Result<RipperProvenance> {
             rusqlite::Error::FromSqlConversionFailure(
                 0,
                 rusqlite::types::Type::Text,
-                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())),
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    e.to_string(),
+                )),
             )
         })?;
     let log_path: String = row.get("log_path")?;
@@ -688,7 +687,11 @@ pub fn insert_rip_file(conn: &Connection, file: &RipFile) -> Result<Id, DbError>
     let bin_json = json_write(&bin_paths)?;
     let cue = opt_path_to_string(&file.cue_path)?;
     let chd = opt_path_to_string(&file.chd_path)?;
-    let source = file.identification_source.as_ref().map(source_to_str).transpose()?;
+    let source = file
+        .identification_source
+        .as_ref()
+        .map(source_to_str)
+        .transpose()?;
     let errors_json = file
         .last_identify_errors
         .as_ref()
@@ -745,7 +748,11 @@ pub fn update_rip_file(conn: &Connection, file: &RipFile) -> Result<(), DbError>
     let bin_json = json_write(&bin_paths)?;
     let cue = opt_path_to_string(&file.cue_path)?;
     let chd = opt_path_to_string(&file.chd_path)?;
-    let source = file.identification_source.as_ref().map(source_to_str).transpose()?;
+    let source = file
+        .identification_source
+        .as_ref()
+        .map(source_to_str)
+        .transpose()?;
     let errors_json = file
         .last_identify_errors
         .as_ref()
@@ -795,7 +802,10 @@ pub fn find_rip_file_by_cue_path(
 ) -> Result<Option<RipFile>, DbError> {
     let path_str = path_to_string(cue_path)?;
     let sql = format!("SELECT {RIP_FILE_COLUMNS} FROM rip_files WHERE cue_path = ?1 LIMIT 1");
-    let mut file = match conn.query_row(&sql, [path_str], row_to_rip_file).optional()? {
+    let mut file = match conn
+        .query_row(&sql, [path_str], row_to_rip_file)
+        .optional()?
+    {
         Some(f) => f,
         None => return Ok(None),
     };
@@ -809,7 +819,10 @@ pub fn find_rip_file_by_chd_path(
 ) -> Result<Option<RipFile>, DbError> {
     let path_str = path_to_string(chd_path)?;
     let sql = format!("SELECT {RIP_FILE_COLUMNS} FROM rip_files WHERE chd_path = ?1 LIMIT 1");
-    let mut file = match conn.query_row(&sql, [path_str], row_to_rip_file).optional()? {
+    let mut file = match conn
+        .query_row(&sql, [path_str], row_to_rip_file)
+        .optional()?
+    {
         Some(f) => f,
         None => return Ok(None),
     };
@@ -823,14 +836,13 @@ pub fn find_rip_file_by_chd_path(
 /// backs a catalog disc. Many-to-one is tolerated (e.g. a future re-rip
 /// attached to the same disc) but we take the earliest by id so behaviour
 /// is stable across re-runs.
-pub fn find_rip_file_for_disc(
-    conn: &Connection,
-    disc_id: Id,
-) -> Result<Option<RipFile>, DbError> {
-    let sql = format!(
-        "SELECT {RIP_FILE_COLUMNS} FROM rip_files WHERE disc_id = ?1 ORDER BY id LIMIT 1"
-    );
-    let mut file = match conn.query_row(&sql, [disc_id], row_to_rip_file).optional()? {
+pub fn find_rip_file_for_disc(conn: &Connection, disc_id: Id) -> Result<Option<RipFile>, DbError> {
+    let sql =
+        format!("SELECT {RIP_FILE_COLUMNS} FROM rip_files WHERE disc_id = ?1 ORDER BY id LIMIT 1");
+    let mut file = match conn
+        .query_row(&sql, [disc_id], row_to_rip_file)
+        .optional()?
+    {
         Some(f) => f,
         None => return Ok(None),
     };
@@ -950,7 +962,9 @@ fn row_to_asset(row: &Row) -> rusqlite::Result<Asset> {
         group_id: row.get("group_id")?,
         sequence: sequence as u16,
         source_url: row.get("source_url")?,
-        file_path: row.get::<_, Option<String>>("file_path")?.map(PathBuf::from),
+        file_path: row
+            .get::<_, Option<String>>("file_path")?
+            .map(PathBuf::from),
         scraped_at: row.get("scraped_at")?,
     })
 }
@@ -1234,9 +1248,7 @@ pub fn insert_library_folder(conn: &Connection, path: &Path) -> Result<Id, DbErr
 }
 
 pub fn list_library_folders(conn: &Connection) -> Result<Vec<LibraryFolder>, DbError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, path, added_at FROM library_folders ORDER BY id",
-    )?;
+    let mut stmt = conn.prepare("SELECT id, path, added_at FROM library_folders ORDER BY id")?;
     let rows = stmt.query_map([], row_to_library_folder)?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }

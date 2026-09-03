@@ -8,8 +8,8 @@ use phono_junk_identify::{
     AlbumMeta, AssetLookupCtx, AssetProvider, AssetType, Credentials, HttpClient,
     IdentificationProvider, ReleaseMeta,
 };
-use phono_junk_tower::cache::ResponseCache;
 use phono_junk_tower::TowerProvider;
+use phono_junk_tower::cache::ResponseCache;
 use tempfile::TempDir;
 
 const SEARCH_HTML: &[u8] = include_bytes!("fixtures/search-barcode-hit.html");
@@ -61,11 +61,15 @@ fn lookup_round_trips_search_and_release() {
     let (search_mock, release_mock) = mount(&server);
     let dir = TempDir::new().unwrap();
     let cache = ResponseCache::with_root(dir.path().into());
-    let provider = TowerProvider::with_client_and_cache(client(), cache)
-        .with_base_url(server.base_url());
+    let provider =
+        TowerProvider::with_client_and_cache(client(), cache).with_base_url(server.base_url());
 
     let result = provider
-        .lookup(&toc_stub(), &ids_with_barcode("075992665629"), &Credentials::new())
+        .lookup(
+            &toc_stub(),
+            &ids_with_barcode("075992665629"),
+            &Credentials::new(),
+        )
         .unwrap()
         .expect("fixture release should be returned");
 
@@ -88,7 +92,10 @@ fn lookup_round_trips_search_and_release() {
     // Raw response forensic payload is populated with the Tower-specific
     // extras we don't promote to the generic schema.
     let raw = result.raw_response.expect("raw_response populated");
-    assert_eq!(raw.get("release_id").and_then(|v| v.as_u64()), Some(10054881));
+    assert_eq!(
+        raw.get("release_id").and_then(|v| v.as_u64()),
+        Some(10054881)
+    );
     assert!(raw.get("version_list").and_then(|v| v.as_array()).is_some());
 
     search_mock.assert();
@@ -101,8 +108,8 @@ fn lookup_art_returns_front_cover() {
     let (_s, _r) = mount(&server);
     let dir = TempDir::new().unwrap();
     let cache = ResponseCache::with_root(dir.path().into());
-    let provider = TowerProvider::with_client_and_cache(client(), cache)
-        .with_base_url(server.base_url());
+    let provider =
+        TowerProvider::with_client_and_cache(client(), cache).with_base_url(server.base_url());
 
     let album = AlbumMeta::default();
     let release = ReleaseMeta::default();
@@ -138,16 +145,24 @@ fn cache_absorbs_second_call() {
     });
     let dir = TempDir::new().unwrap();
     let cache = ResponseCache::with_root(dir.path().into());
-    let provider = TowerProvider::with_client_and_cache(client(), cache)
-        .with_base_url(server.base_url());
+    let provider =
+        TowerProvider::with_client_and_cache(client(), cache).with_base_url(server.base_url());
 
     // First call — fills the cache.
     provider
-        .lookup(&toc_stub(), &ids_with_barcode("075992665629"), &Credentials::new())
+        .lookup(
+            &toc_stub(),
+            &ids_with_barcode("075992665629"),
+            &Credentials::new(),
+        )
         .unwrap();
     // Second call — should not hit the network at all.
     provider
-        .lookup(&toc_stub(), &ids_with_barcode("075992665629"), &Credentials::new())
+        .lookup(
+            &toc_stub(),
+            &ids_with_barcode("075992665629"),
+            &Credentials::new(),
+        )
         .unwrap();
 
     search.assert_hits(1);
@@ -166,7 +181,11 @@ fn empty_search_results_yields_ok_none() {
     });
     let provider = TowerProvider::with_client(client()).with_base_url(server.base_url());
     let r = provider
-        .lookup(&toc_stub(), &ids_with_barcode("0000000000000"), &Credentials::new())
+        .lookup(
+            &toc_stub(),
+            &ids_with_barcode("0000000000000"),
+            &Credentials::new(),
+        )
         .unwrap();
     assert!(r.is_none());
 }

@@ -30,8 +30,11 @@ where
     let cancel = Arc::new(AtomicBool::new(false));
     let tx = app.message_tx.clone();
 
-    app.operations
-        .push(BackgroundOperation::new(op_id, description, Arc::clone(&cancel)));
+    app.operations.push(BackgroundOperation::new(
+        op_id,
+        description,
+        Arc::clone(&cancel),
+    ));
 
     thread::spawn(move || {
         work(op_id, cancel, tx);

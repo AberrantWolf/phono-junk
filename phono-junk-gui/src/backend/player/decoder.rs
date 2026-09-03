@@ -125,7 +125,10 @@ mod tests {
             eprintln!("skipping: arver_3track fixture not present");
             return;
         };
-        let probe_sector = probe.next().expect("at least one sector").expect("ok sector");
+        let probe_sector = probe
+            .next()
+            .expect("at least one sector")
+            .expect("ok sector");
         let expected_left = (probe_sector[0] & 0xFFFF) as i16 as f32 / 32_768.0;
         let expected_right = ((probe_sector[0] >> 16) & 0xFFFF) as i16 as f32 / 32_768.0;
 

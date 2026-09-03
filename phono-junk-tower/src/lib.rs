@@ -132,9 +132,7 @@ impl TowerProvider {
             404 => return Ok(None),
             429 => return Err(ProviderError::RateLimited),
             code => {
-                return Err(ProviderError::Network(format!(
-                    "tower search HTTP {code}"
-                )));
+                return Err(ProviderError::Network(format!("tower search HTTP {code}")));
             }
         }
         let hits = parse::parse_search_page(&resp.body)?;
@@ -155,9 +153,7 @@ impl TowerProvider {
             404 => return Ok(None),
             429 => return Err(ProviderError::RateLimited),
             code => {
-                return Err(ProviderError::Network(format!(
-                    "tower release HTTP {code}"
-                )));
+                return Err(ProviderError::Network(format!("tower release HTTP {code}")));
             }
         }
         let detail = parse::parse_release_page(&resp.body)?;
@@ -306,8 +302,7 @@ fn map_http_err(e: HttpError) -> ProviderError {
 /// percent-encode everything else (Japanese catalog numbers can contain
 /// `/` or spaces in rare cases, and full-width chars need encoding).
 fn url_encode_segment(s: &str) -> String {
-    const UNRESERVED: &[u8] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    const UNRESERVED: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
     let mut out = String::with_capacity(s.len());
     for b in s.as_bytes() {
         if UNRESERVED.contains(b) {

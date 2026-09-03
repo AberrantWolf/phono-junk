@@ -39,10 +39,7 @@ where
         return Vec::new();
     }
     std::thread::scope(|s| {
-        let handles: Vec<_> = providers
-            .iter()
-            .map(|p| s.spawn(|| f(*p)))
-            .collect();
+        let handles: Vec<_> = providers.iter().map(|p| s.spawn(|| f(*p))).collect();
         handles
             .into_iter()
             .map(|h| match h.join() {
@@ -73,9 +70,8 @@ pub fn identify_parallel(
         return Vec::new();
     }
     let names: Vec<String> = applicable.iter().map(|p| p.name().to_string()).collect();
-    let results = spawn_all::<dyn IdentificationProvider, _, _>(&applicable, |p| {
-        p.lookup(toc, ids, creds)
-    });
+    let results =
+        spawn_all::<dyn IdentificationProvider, _, _>(&applicable, |p| p.lookup(toc, ids, creds));
     names.into_iter().zip(results).collect()
 }
 

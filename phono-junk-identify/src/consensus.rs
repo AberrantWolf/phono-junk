@@ -86,7 +86,10 @@ pub fn merge(results: &[ProviderResult]) -> MergedDisc {
     let cohort: Vec<&ProviderResult> = results
         .iter()
         .filter(|r| {
-            let a_ok = match (&album_mbid, r.album.as_ref().and_then(|a| a.mbid.as_deref())) {
+            let a_ok = match (
+                &album_mbid,
+                r.album.as_ref().and_then(|a| a.mbid.as_deref()),
+            ) {
                 (Some(w), Some(x)) => w == x,
                 _ => true, // winner is None, or this provider had no MBID → stays in cohort
             };
@@ -105,12 +108,7 @@ pub fn merge(results: &[ProviderResult]) -> MergedDisc {
     let album_values = |f: fn(&AlbumMeta) -> Option<String>| -> Vec<(String, Option<String>)> {
         cohort
             .iter()
-            .map(|r| {
-                (
-                    r.provider.clone(),
-                    r.album.as_ref().and_then(f),
-                )
-            })
+            .map(|r| (r.provider.clone(), r.album.as_ref().and_then(f)))
             .collect()
     };
     let album_values_u16 = |f: fn(&AlbumMeta) -> Option<u16>| -> Vec<(String, Option<u16>)> {
@@ -314,10 +312,7 @@ pub fn merge_with_toc_fallback(results: &[ProviderResult], toc: &Toc) -> MergedD
 /// Merge tracks across the cohort, keyed by `position`. Tracks present in
 /// only some providers are kept as-is; conflicting fields at the same
 /// position produce per-field disagreements tagged with that position.
-fn merge_tracks(
-    cohort: &[&ProviderResult],
-    sink: &mut Vec<RawDisagreement>,
-) -> Vec<TrackMeta> {
+fn merge_tracks(cohort: &[&ProviderResult], sink: &mut Vec<RawDisagreement>) -> Vec<TrackMeta> {
     // Collect per-position -> Vec<(provider, &TrackMeta)> in priority order.
     let mut by_pos: HashMap<u8, Vec<(String, &TrackMeta)>> = HashMap::new();
     let mut ordered_positions: Vec<u8> = Vec::new();
@@ -340,10 +335,9 @@ fn merge_tracks(
         let entries = &by_pos[&pos];
         let entity = DisagreementEntity::Track { position: pos };
 
-        let values_string =
-            |f: fn(&TrackMeta) -> Option<String>| -> Vec<(String, Option<String>)> {
-                entries.iter().map(|(p, t)| (p.clone(), f(t))).collect()
-            };
+        let values_string = |f: fn(&TrackMeta) -> Option<String>| -> Vec<(String, Option<String>)> {
+            entries.iter().map(|(p, t)| (p.clone(), f(t))).collect()
+        };
         let values_u64 = |f: fn(&TrackMeta) -> Option<u64>| -> Vec<(String, Option<u64>)> {
             entries.iter().map(|(p, t)| (p.clone(), f(t))).collect()
         };

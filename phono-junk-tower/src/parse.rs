@@ -139,10 +139,7 @@ pub fn parse_search_page(bytes: &[u8]) -> Result<Vec<SearchHit>, ProviderError> 
     for row in html.select(&SEARCH_RESULT_ROW) {
         // Keep only rows explicitly labelled "Release". Artist / genre
         // cards use the same row template and would otherwise leak in.
-        let cat = row
-            .select(&SEARCH_CAT_LABEL)
-            .next()
-            .map(|e| trim_text(&e));
+        let cat = row.select(&SEARCH_CAT_LABEL).next().map(|e| trim_text(&e));
         if cat.as_deref() != Some("Release") {
             continue;
         }
@@ -158,10 +155,7 @@ pub fn parse_search_page(bytes: &[u8]) -> Result<Vec<SearchHit>, ProviderError> 
         let artist = row.select(&SEARCH_ARTIST_LINK).next();
         let (artist_id, artist_name) = match artist {
             Some(a) => {
-                let id = a
-                    .value()
-                    .attr("href")
-                    .and_then(parse_artist_id);
+                let id = a.value().attr("href").and_then(parse_artist_id);
                 (id, Some(trim_text(&a)))
             }
             None => (None, None),
@@ -171,10 +165,7 @@ pub fn parse_search_page(bytes: &[u8]) -> Result<Vec<SearchHit>, ProviderError> 
             .map(|e| trim_text(&e))
             .filter(|s| !s.is_empty())
             .collect();
-        let genre = row
-            .select(&SEARCH_GENRE_LINK)
-            .next()
-            .map(|e| trim_text(&e));
+        let genre = row.select(&SEARCH_GENRE_LINK).next().map(|e| trim_text(&e));
         let release_date_text = find_date_after_label(&row);
         let thumb_url = row
             .select(&SEARCH_THUMB)
@@ -234,9 +225,10 @@ pub fn parse_release_page(bytes: &[u8]) -> Result<ReleaseDetail, ProviderError> 
                 "item-hatsubaibi" => {
                     let raw = value_text(&row);
                     if let Some(ref s) = raw
-                        && let Some((y, _m, _d)) = parse_jp_date(s) {
-                            detail.release_year = Some(y);
-                        }
+                        && let Some((y, _m, _d)) = parse_jp_date(s)
+                    {
+                        detail.release_year = Some(y);
+                    }
                     detail.release_date_text = raw;
                 }
                 "item-genre" => {
@@ -277,7 +269,9 @@ pub fn parse_release_page(bytes: &[u8]) -> Result<ReleaseDetail, ProviderError> 
             "収録内容" => detail.tracks = parse_tracklist(container),
             "クレジット" => detail.credits = parse_credits(container),
             "リリース概要" => detail.description = parse_description(container),
-            "バージョンリスト" => detail.version_list = parse_version_list(container, detail.release_id),
+            "バージョンリスト" => {
+                detail.version_list = parse_version_list(container, detail.release_id)
+            }
             _ => {}
         }
     }
@@ -527,7 +521,11 @@ fn leading_digits_after(text: &str, marker: &str) -> Option<String> {
         .skip_while(|c| c.is_whitespace())
         .take_while(|c| c.is_ascii_digit())
         .collect();
-    if digits.is_empty() { None } else { Some(digits) }
+    if digits.is_empty() {
+        None
+    } else {
+        Some(digits)
+    }
 }
 
 /// Find the nearest ancestor with the given class token. Used to snap a
@@ -537,12 +535,10 @@ fn ancestor_with_class<'a>(el: &ElementRef<'a>, class_token: &str) -> Option<Ele
     while let Some(node) = cur {
         if let Some(elem) = ElementRef::wrap(node)
             && let Some(class) = elem.value().attr("class")
-                && class
-                    .split_ascii_whitespace()
-                    .any(|t| t == class_token)
-                {
-                    return Some(elem);
-                }
+            && class.split_ascii_whitespace().any(|t| t == class_token)
+        {
+            return Some(elem);
+        }
         cur = node.parent();
     }
     None

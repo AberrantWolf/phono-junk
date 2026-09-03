@@ -93,9 +93,8 @@ pub fn plan_output_paths(
     tracks: &[Track],
     album_artist_override: Option<&str>,
 ) -> Vec<PathBuf> {
-    let artist_dir = album_artist_component(
-        album_artist_override.or(album.artist_credit.as_deref()),
-    );
+    let artist_dir =
+        album_artist_component(album_artist_override.or(album.artist_credit.as_deref()));
     let album_dir = album_folder_name(album);
     let base = library_root.join(artist_dir).join(album_dir);
     let disc_dir = if total_discs > 1 {
@@ -120,9 +119,8 @@ pub fn plan_disc_directory(
     total_discs: u8,
     album_artist_override: Option<&str>,
 ) -> PathBuf {
-    let artist_dir = album_artist_component(
-        album_artist_override.or(album.artist_credit.as_deref()),
-    );
+    let artist_dir =
+        album_artist_component(album_artist_override.or(album.artist_credit.as_deref()));
     let album_dir = album_folder_name(album);
     let base = library_root.join(artist_dir).join(album_dir);
     if total_discs > 1 {
@@ -266,8 +264,7 @@ mod tests {
         let root = PathBuf::from("/lib");
         let a = mk_album("Mixtape", Some("DJ Shadow"), Some(2000));
         let tracks = vec![mk_track(1, "Track One")];
-        let paths =
-            plan_output_paths(&root, &a, 1, 1, &tracks, Some("Various Artists"));
+        let paths = plan_output_paths(&root, &a, 1, 1, &tracks, Some("Various Artists"));
         assert_eq!(
             paths[0],
             PathBuf::from("/lib/Various Artists/Mixtape (2000)/01 - Track One.flac")

@@ -206,7 +206,11 @@ fn export_writes_tree_with_tagged_flacs_and_cover() {
     let track2 = album_dir.join("02 - Second _ Track.flac");
     let cover = album_dir.join("cover.jpg");
 
-    assert!(track1.exists(), "track 1 flac written: {}", track1.display());
+    assert!(
+        track1.exists(),
+        "track 1 flac written: {}",
+        track1.display()
+    );
     assert!(track2.exists(), "track 2 flac written");
     assert!(cover.exists(), "cover.jpg written");
     assert_eq!(fs::read(&cover).unwrap(), cover_bytes, "cover bytes match");
@@ -230,7 +234,10 @@ fn export_writes_tree_with_tagged_flacs_and_cover() {
     let tag = Tag::read_from_path(&track1).unwrap();
     let vc = tag.vorbis_comments().expect("vorbis comments present");
     assert_eq!(vc.get("ALBUM").unwrap(), &vec!["Test Album".to_string()]);
-    assert_eq!(vc.get("ALBUMARTIST").unwrap(), &vec!["Test Artist".to_string()]);
+    assert_eq!(
+        vc.get("ALBUMARTIST").unwrap(),
+        &vec!["Test Artist".to_string()]
+    );
     assert_eq!(vc.get("ARTIST").unwrap(), &vec!["Test Artist".to_string()]);
     assert_eq!(vc.get("TITLE").unwrap(), &vec!["First Track".to_string()]);
     assert_eq!(vc.get("TRACKNUMBER").unwrap(), &vec!["1".to_string()]);
@@ -249,7 +256,13 @@ fn export_writes_tree_with_tagged_flacs_and_cover() {
 
     let picture = tag
         .blocks()
-        .find_map(|b| if let Block::Picture(p) = b { Some(p) } else { None })
+        .find_map(|b| {
+            if let Block::Picture(p) = b {
+                Some(p)
+            } else {
+                None
+            }
+        })
         .expect("picture block");
     assert_eq!(picture.picture_type, PictureType::CoverFront);
     assert_eq!(picture.mime_type, "image/jpeg");

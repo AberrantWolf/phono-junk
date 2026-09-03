@@ -178,11 +178,7 @@ impl CredentialStore {
     /// failure the in-memory store is still updated — identification
     /// keeps working for the current session — but the caller learns
     /// the token won't survive a restart.
-    pub fn store_to_keyring(
-        &self,
-        provider: &str,
-        token: &str,
-    ) -> Result<(), CredentialError> {
+    pub fn store_to_keyring(&self, provider: &str, token: &str) -> Result<(), CredentialError> {
         self.set(provider, token);
         let entry = keyring::Entry::new(KEYRING_SERVICE, provider).map_err(map_keyring_err)?;
         entry.set_password(token).map_err(map_keyring_err)?;
@@ -250,7 +246,10 @@ mod tests {
         store.set("discogs", "super-secret-xyz");
         let creds = store.to_credentials();
         let dbg = format!("{:?}", creds);
-        assert!(!dbg.contains("super-secret-xyz"), "creds debug leaked: {dbg}");
+        assert!(
+            !dbg.contains("super-secret-xyz"),
+            "creds debug leaked: {dbg}"
+        );
         assert!(dbg.contains("discogs"), "creds debug missing key: {dbg}");
     }
 

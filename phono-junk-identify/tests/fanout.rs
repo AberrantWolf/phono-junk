@@ -5,8 +5,8 @@
 //! fanout_tests.rs`) — `HttpClientBuilder::fake_host_quota` is
 //! `#[cfg(test)]`-gated and only visible inside the crate.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use phono_junk_core::{DiscIds, Toc};
 use phono_junk_identify::{
@@ -95,7 +95,12 @@ fn all_ok_results_returned_in_provider_order() {
         }),
     ));
     let providers = vec![a, b];
-    let results = identify_parallel(&providers, &default_toc(), &discid_ids(), &Credentials::new());
+    let results = identify_parallel(
+        &providers,
+        &default_toc(),
+        &discid_ids(),
+        &Credentials::new(),
+    );
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].0, "a");
     assert_eq!(results[1].0, "b");
@@ -103,10 +108,8 @@ fn all_ok_results_returned_in_provider_order() {
 
 #[test]
 fn one_failure_does_not_block_others() {
-    let a: Box<dyn IdentificationProvider> = Box::new(MockIdentifier::new(
-        "a",
-        MockOutcome::Error("boom"),
-    ));
+    let a: Box<dyn IdentificationProvider> =
+        Box::new(MockIdentifier::new("a", MockOutcome::Error("boom")));
     let b: Box<dyn IdentificationProvider> = Box::new(MockIdentifier::new(
         "b",
         MockOutcome::Some(ProviderResult {
@@ -115,7 +118,12 @@ fn one_failure_does_not_block_others() {
         }),
     ));
     let providers = vec![a, b];
-    let results = identify_parallel(&providers, &default_toc(), &discid_ids(), &Credentials::new());
+    let results = identify_parallel(
+        &providers,
+        &default_toc(),
+        &discid_ids(),
+        &Credentials::new(),
+    );
     assert_eq!(results.len(), 2);
     assert!(results[0].1.is_err(), "first provider should be Err");
     assert!(results[1].1.is_ok(), "second provider should still succeed");
@@ -149,7 +157,12 @@ fn filter_by_supported_ids_skips_non_applicable() {
     });
     let providers = vec![a];
     // discid_ids has no barcode — barcode-only provider should be skipped.
-    let results = identify_parallel(&providers, &default_toc(), &discid_ids(), &Credentials::new());
+    let results = identify_parallel(
+        &providers,
+        &default_toc(),
+        &discid_ids(),
+        &Credentials::new(),
+    );
     assert!(results.is_empty());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
@@ -164,12 +177,15 @@ fn spawn_all_is_empty_on_empty_input() {
 
 #[test]
 fn all_providers_returning_none_yields_all_nones() {
-    let a: Box<dyn IdentificationProvider> =
-        Box::new(MockIdentifier::new("a", MockOutcome::None));
-    let b: Box<dyn IdentificationProvider> =
-        Box::new(MockIdentifier::new("b", MockOutcome::None));
+    let a: Box<dyn IdentificationProvider> = Box::new(MockIdentifier::new("a", MockOutcome::None));
+    let b: Box<dyn IdentificationProvider> = Box::new(MockIdentifier::new("b", MockOutcome::None));
     let providers = vec![a, b];
-    let results = identify_parallel(&providers, &default_toc(), &discid_ids(), &Credentials::new());
+    let results = identify_parallel(
+        &providers,
+        &default_toc(),
+        &discid_ids(),
+        &Credentials::new(),
+    );
     assert_eq!(results.len(), 2);
     assert!(matches!(results[0].1, Ok(None)));
     assert!(matches!(results[1].1, Ok(None)));

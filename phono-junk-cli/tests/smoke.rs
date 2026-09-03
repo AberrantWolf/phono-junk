@@ -91,12 +91,7 @@ fn credentials_list_on_empty_store_is_benign() {
     let tmp = TempDir::new().unwrap();
     let db_path = tmp.path().join("library.db");
     phono()
-        .args([
-            "--db",
-            db_path.to_str().unwrap(),
-            "credentials",
-            "list",
-        ])
+        .args(["--db", db_path.to_str().unwrap(), "credentials", "list"])
         .assert()
         .success();
 }
@@ -177,7 +172,11 @@ fn scan_no_identify_populates_rip_files_and_list_shows_them() {
         .get("Unidentified")
         .and_then(|v| v.as_array())
         .expect("expected Unidentified variant with rows");
-    assert_eq!(rows.len(), 1, "expected exactly one unidentified rip: {parsed}");
+    assert_eq!(
+        rows.len(),
+        1,
+        "expected exactly one unidentified rip: {parsed}"
+    );
     let path = rows[0]["cue_path"].as_str().unwrap();
     assert!(
         path.ends_with("arver_3track.cue"),

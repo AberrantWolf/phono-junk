@@ -65,15 +65,17 @@ pub fn configure_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
 
     // Register every font exactly once.
-    fonts
-        .font_data
-        .insert(F_LATIN.into(), FontData::from_static(NOTO_SANS_REGULAR).into());
+    fonts.font_data.insert(
+        F_LATIN.into(),
+        FontData::from_static(NOTO_SANS_REGULAR).into(),
+    );
     fonts
         .font_data
         .insert(F_BOLD.into(), FontData::from_static(NOTO_SANS_BOLD).into());
-    fonts
-        .font_data
-        .insert(F_HEBREW.into(), FontData::from_static(NOTO_SANS_HEBREW).into());
+    fonts.font_data.insert(
+        F_HEBREW.into(),
+        FontData::from_static(NOTO_SANS_HEBREW).into(),
+    );
     fonts
         .font_data
         .insert(F_JP.into(), FontData::from_static(NOTO_SANS_JP).into());
@@ -117,12 +119,36 @@ pub fn configure_fonts(ctx: &egui::Context) {
     // Named families for explicit routing. Each CJK family uses its
     // region's font as primary, Latin as the Latin-glyph fallback, and
     // the other CJK fonts behind it so missing codepoints still resolve.
-    install_named(&mut fonts, FAMILY_BOLD, &[F_BOLD, F_LATIN, F_JP, F_KR, F_SC, F_TC, F_HK, F_HEBREW]);
-    install_named(&mut fonts, FAMILY_CJK_JP, &[F_JP, F_LATIN, F_SC, F_TC, F_HK, F_KR, F_HEBREW]);
-    install_named(&mut fonts, FAMILY_CJK_KR, &[F_KR, F_LATIN, F_JP, F_SC, F_TC, F_HK, F_HEBREW]);
-    install_named(&mut fonts, FAMILY_CJK_SC, &[F_SC, F_LATIN, F_TC, F_HK, F_JP, F_KR, F_HEBREW]);
-    install_named(&mut fonts, FAMILY_CJK_TC, &[F_TC, F_LATIN, F_HK, F_SC, F_JP, F_KR, F_HEBREW]);
-    install_named(&mut fonts, FAMILY_CJK_HK, &[F_HK, F_LATIN, F_TC, F_SC, F_JP, F_KR, F_HEBREW]);
+    install_named(
+        &mut fonts,
+        FAMILY_BOLD,
+        &[F_BOLD, F_LATIN, F_JP, F_KR, F_SC, F_TC, F_HK, F_HEBREW],
+    );
+    install_named(
+        &mut fonts,
+        FAMILY_CJK_JP,
+        &[F_JP, F_LATIN, F_SC, F_TC, F_HK, F_KR, F_HEBREW],
+    );
+    install_named(
+        &mut fonts,
+        FAMILY_CJK_KR,
+        &[F_KR, F_LATIN, F_JP, F_SC, F_TC, F_HK, F_HEBREW],
+    );
+    install_named(
+        &mut fonts,
+        FAMILY_CJK_SC,
+        &[F_SC, F_LATIN, F_TC, F_HK, F_JP, F_KR, F_HEBREW],
+    );
+    install_named(
+        &mut fonts,
+        FAMILY_CJK_TC,
+        &[F_TC, F_LATIN, F_HK, F_SC, F_JP, F_KR, F_HEBREW],
+    );
+    install_named(
+        &mut fonts,
+        FAMILY_CJK_HK,
+        &[F_HK, F_LATIN, F_TC, F_SC, F_JP, F_KR, F_HEBREW],
+    );
 
     ctx.set_fonts(fonts);
 }
@@ -186,11 +212,16 @@ fn from_script(script: Option<&str>, country: Option<&str>) -> Option<FontFamily
         "Jpan" | "Hrkt" | "Hira" | "Kana" => Some(named(FAMILY_CJK_JP)),
         "Hang" | "Kore" => Some(named(FAMILY_CJK_KR)),
         "Hans" => Some(named(FAMILY_CJK_SC)),
-        "Hant" => Some(if country.map(|c| c.eq_ignore_ascii_case("HK")).unwrap_or(false) {
-            named(FAMILY_CJK_HK)
-        } else {
-            named(FAMILY_CJK_TC)
-        }),
+        "Hant" => Some(
+            if country
+                .map(|c| c.eq_ignore_ascii_case("HK"))
+                .unwrap_or(false)
+            {
+                named(FAMILY_CJK_HK)
+            } else {
+                named(FAMILY_CJK_TC)
+            },
+        ),
         _ => None,
     }
 }
@@ -216,7 +247,10 @@ fn zh_family(script: Option<&str>, country: Option<&str>) -> FontFamily {
     match script {
         Some("Hans") => named(FAMILY_CJK_SC),
         Some("Hant") => {
-            if country.map(|c| c.eq_ignore_ascii_case("HK")).unwrap_or(false) {
+            if country
+                .map(|c| c.eq_ignore_ascii_case("HK"))
+                .unwrap_or(false)
+            {
                 named(FAMILY_CJK_HK)
             } else {
                 named(FAMILY_CJK_TC)

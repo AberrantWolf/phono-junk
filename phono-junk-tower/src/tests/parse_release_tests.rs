@@ -30,13 +30,18 @@ fn parse_release_page_extracts_cover_url_without_size_param() {
     let d = parse_release_page(FIXTURE).unwrap();
     let url = d.cover_url.expect("main-jacket-photo src should parse");
     assert!(url.starts_with("https://cdn.tower.jp/"));
-    assert!(!url.contains("?size="), "cover URL should have ?size=... stripped");
+    assert!(
+        !url.contains("?size="),
+        "cover URL should have ?size=... stripped"
+    );
 }
 
 #[test]
 fn parse_release_page_extracts_tower_shop_link() {
     let d = parse_release_page(FIXTURE).unwrap();
-    let url = d.tower_shop_url.expect("tower.jp/item/... link should be present");
+    let url = d
+        .tower_shop_url
+        .expect("tower.jp/item/... link should be present");
     assert!(url.starts_with("https://tower.jp/item/"));
 }
 
@@ -80,7 +85,10 @@ fn parse_release_page_extracts_version_list_excluding_self() {
     // completion edition WPCR-28041, Music On Vinyl, Evolution,
     // Anniversary editions). The current release (10054881) must not
     // appear in its own version list.
-    assert!(!d.version_list.is_empty(), "version list should have entries");
+    assert!(
+        !d.version_list.is_empty(),
+        "version list should have entries"
+    );
     assert!(
         !d.version_list.iter().any(|v| v.release_id == 10054881),
         "current release must be excluded from its own version list"
@@ -90,7 +98,9 @@ fn parse_release_page_extracts_version_list_excluding_self() {
 #[test]
 fn parse_release_page_extracts_description() {
     let d = parse_release_page(FIXTURE).unwrap();
-    let desc = d.description.expect("fixture contains a リリース概要 block");
+    let desc = d
+        .description
+        .expect("fixture contains a リリース概要 block");
     assert!(desc.contains("Fourplay"));
 }
 

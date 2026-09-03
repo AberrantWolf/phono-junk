@@ -22,7 +22,10 @@ pub enum OverrideError {
     #[error("malformed sub_path: {0}")]
     MalformedPath(String),
     #[error("unknown segment `{segment}` on {target}")]
-    UnknownSegment { target: &'static str, segment: String },
+    UnknownSegment {
+        target: &'static str,
+        segment: String,
+    },
     #[error("index {index} out of range on `{segment}` (len {len})")]
     IndexOutOfRange {
         segment: String,
@@ -73,9 +76,9 @@ fn parse_segment(raw: &str) -> Result<Segment, OverrideError> {
             Ok(Segment::Field(raw.to_string()))
         }
         Some(open) => {
-            let close = raw
-                .rfind(']')
-                .ok_or_else(|| OverrideError::MalformedPath(format!("unterminated `[` in `{raw}`")))?;
+            let close = raw.rfind(']').ok_or_else(|| {
+                OverrideError::MalformedPath(format!("unterminated `[` in `{raw}`"))
+            })?;
             if close != raw.len() - 1 {
                 return Err(OverrideError::MalformedPath(format!(
                     "trailing text after `]` in `{raw}`"

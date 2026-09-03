@@ -31,19 +31,14 @@ pub fn lookup_cached(
     current_size: u64,
 ) -> Result<Option<RipFile>, DbError> {
     let cached = find_by_path(conn, path)?;
-    Ok(cached.filter(|f| {
-        f.mtime == Some(current_mtime) && f.size == Some(current_size)
-    }))
+    Ok(cached.filter(|f| f.mtime == Some(current_mtime) && f.size == Some(current_size)))
 }
 
 /// Insert or update a rip-file row keyed on `cue_path` (preferred) or
 /// `chd_path`. If an existing row is found, its `id` is preserved and all
 /// other fields are overwritten from `file`. Returns the final row id.
 pub fn upsert_rip_file(conn: &Connection, file: &RipFile) -> Result<Id, DbError> {
-    let lookup_path = file
-        .cue_path
-        .as_deref()
-        .or(file.chd_path.as_deref());
+    let lookup_path = file.cue_path.as_deref().or(file.chd_path.as_deref());
 
     if let Some(path) = lookup_path
         && let Some(existing) = find_by_path(conn, path)?

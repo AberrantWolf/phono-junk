@@ -119,7 +119,10 @@ impl IdentificationProvider for DiscogsProvider {
             return Ok(None);
         };
         let headers = auth_headers(token)?;
-        let resp = self.http()?.get_with_headers(url.as_str(), &headers).map_err(map_http_err)?;
+        let resp = self
+            .http()?
+            .get_with_headers(url.as_str(), &headers)
+            .map_err(map_http_err)?;
         match resp.status {
             200 => parse_search_response(&resp.body),
             401 | 403 => Err(ProviderError::Auth("discogs token rejected".into())),
@@ -151,7 +154,10 @@ impl AssetProvider for DiscogsProvider {
             return Ok(Vec::new());
         };
         let headers = auth_headers(token)?;
-        let resp = self.http()?.get_with_headers(url.as_str(), &headers).map_err(map_http_err)?;
+        let resp = self
+            .http()?
+            .get_with_headers(url.as_str(), &headers)
+            .map_err(map_http_err)?;
         if resp.status != 200 {
             // Silent on asset-side failures — identify already logged it.
             return Ok(Vec::new());
@@ -290,9 +296,10 @@ fn split_title(combined: Option<&str>) -> (Option<String>, Option<String>) {
         _ => return (None, None),
     };
     match t.split_once(" - ") {
-        Some((artist, title)) if !artist.is_empty() && !title.is_empty() => {
-            (Some(artist.trim().to_string()), Some(title.trim().to_string()))
-        }
+        Some((artist, title)) if !artist.is_empty() && !title.is_empty() => (
+            Some(artist.trim().to_string()),
+            Some(title.trim().to_string()),
+        ),
         _ => (None, Some(t.to_string())),
     }
 }
@@ -353,7 +360,10 @@ mod tests {
             (Some("Foo".into()), Some("Bar".into()))
         );
         assert_eq!(split_title(Some("")), (None, None));
-        assert_eq!(split_title(Some("JustAlbum")), (None, Some("JustAlbum".into())));
+        assert_eq!(
+            split_title(Some("JustAlbum")),
+            (None, Some("JustAlbum".into()))
+        );
         assert_eq!(split_title(None), (None, None));
     }
 

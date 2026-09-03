@@ -69,10 +69,7 @@ pub enum AppMessage {
     OperationComplete { op_id: OperationId },
     /// Worker bailed with an error. Behaves like `OperationComplete`
     /// except the error surfaces on `app.load_error`.
-    OperationFailed {
-        op_id: OperationId,
-        error: String,
-    },
+    OperationFailed { op_id: OperationId, error: String },
     /// DB state changed in a way that the album list should observe.
     /// Triggers a `reload_rows` on the main thread.
     LibraryChanged,
@@ -82,17 +79,11 @@ pub enum AppMessage {
     /// Cover-art bytes finished downloading for `key`. Stored on
     /// `app.detail_cache` only if the still-focused entry matches; stale
     /// loads (user clicked elsewhere mid-fetch) are dropped.
-    DetailArtLoaded {
-        key: EntryKey,
-        bytes: Vec<u8>,
-    },
+    DetailArtLoaded { key: EntryKey, bytes: Vec<u8> },
     /// Cover-art fetch failed for `key` — surfaces inline on the detail
     /// panel so the user sees *why* instead of egui's anonymous broken-
     /// image placeholder.
-    DetailArtFailed {
-        key: EntryKey,
-        error: String,
-    },
+    DetailArtFailed { key: EntryKey, error: String },
 }
 
 /// In-memory cache for the currently-focused detail panel. Built lazily on

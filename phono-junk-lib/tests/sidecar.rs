@@ -126,7 +126,10 @@ fn collect_returns_empty_when_no_sidecars() {
     let td = tempfile::tempdir().unwrap();
     let cue = write_cue_with_sidecars(td.path(), "album", None);
     let data = collect_redumper_sidecars(&cue);
-    assert!(data.is_empty(), "CUE-only directory yields empty sidecar data");
+    assert!(
+        data.is_empty(),
+        "CUE-only directory yields empty sidecar data"
+    );
 }
 
 #[test]
@@ -141,18 +144,12 @@ fn collect_parses_log_and_stamps_redumper_provenance() {
     let prov = data.provenance.as_ref().expect("provenance stamped");
     assert_eq!(prov.ripper, Ripper::Redumper);
     assert_eq!(prov.read_offset, Some(6));
-    assert_eq!(
-        prov.version.as_deref(),
-        Some("v2024.03.01 build_20240301")
-    );
+    assert_eq!(prov.version.as_deref(), Some("v2024.03.01 build_20240301"));
     assert_eq!(
         prov.rip_date,
         Some(Utc.with_ymd_and_hms(2024, 1, 15, 14, 23, 45).unwrap())
     );
-    assert_eq!(
-        prov.drive.as_ref().map(|d| d.vendor.as_str()),
-        Some("ASUS")
-    );
+    assert_eq!(prov.drive.as_ref().map(|d| d.vendor.as_str()), Some("ASUS"));
 }
 
 #[test]
@@ -165,7 +162,10 @@ fn collect_on_eac_log_stamps_unknown_provenance() {
     );
     let data = collect_redumper_sidecars(&cue);
 
-    let prov = data.provenance.as_ref().expect("unknown provenance stamped");
+    let prov = data
+        .provenance
+        .as_ref()
+        .expect("unknown provenance stamped");
     assert_eq!(prov.ripper, Ripper::Unknown);
     assert!(prov.version.is_none(), "no version on unrecognised log");
     // No MCN / ISRCs were extracted since the parser rejected the file.
@@ -336,7 +336,11 @@ fn refresh_writes_provenance_when_row_had_none() {
     )
     .unwrap();
 
-    assert!(crud::load_rip_file_provenance(&conn, rip_id).unwrap().is_none());
+    assert!(
+        crud::load_rip_file_provenance(&conn, rip_id)
+            .unwrap()
+            .is_none()
+    );
 
     let changed = refresh_for_cache_hit(&conn, rip_id, Some(disc_id), &cue).unwrap();
     assert!(changed, "refresh should report that something changed");
@@ -411,7 +415,9 @@ fn refresh_preserves_existing_provenance() {
     refresh_for_cache_hit(&conn, rip_id, Some(disc_id), &cue).unwrap();
 
     // Provenance version kept the earlier one.
-    let prov = crud::load_rip_file_provenance(&conn, rip_id).unwrap().unwrap();
+    let prov = crud::load_rip_file_provenance(&conn, rip_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(prov.version.as_deref(), Some("v1.0.0 build_earlier"));
 }
 

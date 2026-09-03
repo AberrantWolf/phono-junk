@@ -148,7 +148,8 @@ fn start_queue(
             // Check cooperative cancel on the current burst (if any).
             let cancel = {
                 let s = state_for_worker.lock().ok();
-                s.as_ref().and_then(|s| s.active_op.as_ref().map(|(_, c)| c.clone()))
+                s.as_ref()
+                    .and_then(|s| s.active_op.as_ref().map(|(_, c)| c.clone()))
             };
             if cancel.as_ref().map_or(false, |c| c.load(Ordering::Relaxed)) {
                 finish_item(&state_for_worker, &ui_tx_for_worker, item.rip_file_id);

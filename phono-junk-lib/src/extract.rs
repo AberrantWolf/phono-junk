@@ -58,7 +58,9 @@ pub enum ExportError {
     MissingRipFile(Id),
     #[error("disc {0} has no usable source: cue_path and chd_path both empty")]
     NoRipSource(Id),
-    #[error("no HttpClient registered on PhonoContext; use with_default_providers() or set ctx.http")]
+    #[error(
+        "no HttpClient registered on PhonoContext; use with_default_providers() or set ctx.http"
+    )]
     NoHttpClient,
     #[error("I/O error at {path}: {source}")]
     Io {
@@ -93,12 +95,11 @@ impl PhonoContext {
         disc_id: Id,
         library_root: &Path,
     ) -> Result<ExportedDisc, ExportError> {
-        let disc = crud::get_disc(conn, disc_id)?
-            .ok_or(ExportError::MissingRow("disc"))?;
-        let release = crud::get_release(conn, disc.release_id)?
-            .ok_or(ExportError::MissingRow("release"))?;
-        let album = crud::get_album(conn, release.album_id)?
-            .ok_or(ExportError::MissingRow("album"))?;
+        let disc = crud::get_disc(conn, disc_id)?.ok_or(ExportError::MissingRow("disc"))?;
+        let release =
+            crud::get_release(conn, disc.release_id)?.ok_or(ExportError::MissingRow("release"))?;
+        let album =
+            crud::get_album(conn, release.album_id)?.ok_or(ExportError::MissingRow("album"))?;
         let tracks = crud::list_tracks_for_disc(conn, disc_id)?;
         let assets = crud::list_assets_for_release(conn, release.id)?;
         let sibling_discs = crud::list_discs_for_release(conn, release.id)?;
@@ -143,13 +144,7 @@ impl PhonoContext {
                 total_discs,
                 &album_artist,
             );
-            encode_flac_track(
-                pcm,
-                total_samples,
-                &tags,
-                cover_bytes.as_deref(),
-                out_path,
-            )?;
+            encode_flac_track(pcm, total_samples, &tags, cover_bytes.as_deref(), out_path)?;
             written.push(out_path.clone());
         }
 
@@ -301,8 +296,7 @@ pub fn open_pcm_reader(
 /// `<library_root>/.cache/assets` on the rare platforms where `dirs::cache_dir`
 /// returns `None`.
 fn resolve_asset_cache_dir(library_root: &Path) -> PathBuf {
-    env::default_asset_cache_dir()
-        .unwrap_or_else(|| library_root.join(".cache").join("assets"))
+    env::default_asset_cache_dir().unwrap_or_else(|| library_root.join(".cache").join("assets"))
 }
 
 /// Pick the front-cover asset, ensure its bytes are locally cached, and
@@ -382,7 +376,12 @@ pub fn cache_asset_bytes(
 /// falls back to URL suffix; defaults to `jpg`.
 fn cover_extension(content_type: &Option<String>, url: &str) -> String {
     if let Some(ct) = content_type.as_deref() {
-        let ct = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+        let ct = ct
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
         match ct.as_str() {
             "image/jpeg" | "image/jpg" => return "jpg".into(),
             "image/png" => return "png".into(),
@@ -393,7 +392,11 @@ fn cover_extension(content_type: &Option<String>, url: &str) -> String {
     let lower = url.to_ascii_lowercase();
     for ext in ["jpg", "jpeg", "png", "webp"] {
         if lower.ends_with(&format!(".{ext}")) {
-            return if ext == "jpeg" { "jpg".into() } else { ext.into() };
+            return if ext == "jpeg" {
+                "jpg".into()
+            } else {
+                ext.into()
+            };
         }
     }
     "jpg".into()

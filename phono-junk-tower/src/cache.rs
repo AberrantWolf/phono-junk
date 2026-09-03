@@ -125,9 +125,10 @@ impl ResponseCache {
 
         let resp = fetch()?;
         if resp.status < 500
-            && let Err(e) = self.store(kind, &key, url, &resp) {
-                log::warn!("tower cache: failed to write {}: {e}", self.root.display());
-            }
+            && let Err(e) = self.store(kind, &key, url, &resp)
+        {
+            log::warn!("tower cache: failed to write {}: {e}", self.root.display());
+        }
         Ok(resp)
     }
 
@@ -154,13 +155,7 @@ impl ResponseCache {
         })
     }
 
-    fn store(
-        &self,
-        kind: CacheKind,
-        key: &str,
-        url: &str,
-        resp: &HttpResponse,
-    ) -> io::Result<()> {
+    fn store(&self, kind: CacheKind, key: &str, url: &str, resp: &HttpResponse) -> io::Result<()> {
         let dir = self.root.join(kind.subdir());
         fs::create_dir_all(&dir)?;
         let body_path = self.body_path(kind, key);

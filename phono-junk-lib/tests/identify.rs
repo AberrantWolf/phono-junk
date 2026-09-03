@@ -57,8 +57,7 @@ impl IdentificationProvider for CountingMock {
         _ids: &DiscIds,
         _creds: &Credentials,
     ) -> Result<Option<ProviderResult>, ProviderError> {
-        self.calls
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(self.result.clone())
     }
 }

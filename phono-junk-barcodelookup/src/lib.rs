@@ -119,9 +119,7 @@ impl IdentificationProvider for BarcodelookupProvider {
             401 | 403 => Err(ProviderError::Auth("barcodelookup key rejected".into())),
             429 => Err(ProviderError::RateLimited),
             404 => Ok(None),
-            code => Err(ProviderError::Network(format!(
-                "barcodelookup HTTP {code}"
-            ))),
+            code => Err(ProviderError::Network(format!("barcodelookup HTTP {code}"))),
         }
     }
 }
@@ -282,11 +280,7 @@ fn parse_release_year(date: Option<&str>) -> Option<u16> {
     if s.is_empty() {
         return None;
     }
-    let head = s
-        .split(['-', '/', ' ', 'T'])
-        .next()
-        .unwrap_or("")
-        .trim();
+    let head = s.split(['-', '/', ' ', 'T']).next().unwrap_or("").trim();
     head.parse().ok()
 }
 
@@ -398,9 +392,16 @@ mod tests {
     fn missing_token_is_missing_credential_error() {
         let p = BarcodelookupProvider::new();
         let err = p
-            .lookup(&minimal_toc(), &barcode_ids("0123456789012"), &Credentials::new())
+            .lookup(
+                &minimal_toc(),
+                &barcode_ids("0123456789012"),
+                &Credentials::new(),
+            )
             .unwrap_err();
-        assert!(matches!(err, ProviderError::MissingCredential("barcodelookup")));
+        assert!(matches!(
+            err,
+            ProviderError::MissingCredential("barcodelookup")
+        ));
     }
 
     #[test]
@@ -410,7 +411,9 @@ mod tests {
         let p = BarcodelookupProvider::new();
         let mut creds = Credentials::new();
         creds.set("barcodelookup", "KEY");
-        let out = p.lookup(&minimal_toc(), &DiscIds::default(), &creds).unwrap();
+        let out = p
+            .lookup(&minimal_toc(), &DiscIds::default(), &creds)
+            .unwrap();
         assert!(out.is_none());
     }
 }

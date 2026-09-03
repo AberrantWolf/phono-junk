@@ -184,7 +184,11 @@ fn provider_row(ui: &mut Ui, app: &mut PhonoApp, spec: ProviderSpec) {
             let edit = TextEdit::singleline(draft)
                 .password(true)
                 .desired_width(240.0)
-                .hint_text(if has_token { "••• (stored)" } else { "paste token" });
+                .hint_text(if has_token {
+                    "••• (stored)"
+                } else {
+                    "paste token"
+                });
             if ui.add(edit).changed() {
                 draft_changed = true;
             }
@@ -227,7 +231,11 @@ fn save_token(app: &mut PhonoApp, spec: ProviderSpec) {
         )));
         return;
     }
-    match app.phono_ctx.credentials.store_to_keyring(spec.cred_key, &token) {
+    match app
+        .phono_ctx
+        .credentials
+        .store_to_keyring(spec.cred_key, &token)
+    {
         Ok(()) => {
             app.settings.last_status = Some(SettingsStatus::Stored(spec.display_name));
             app.settings.zeroize_drafts();

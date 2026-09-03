@@ -171,10 +171,7 @@ fn render_album(ui: &mut Ui, app: &mut PhonoApp, detail: &AlbumDetail) {
     let key = EntryKey::Album(detail.album.id);
 
     // Pick the cover from the first release that has one.
-    let cover_asset: Option<&Asset> = detail
-        .releases
-        .iter()
-        .find_map(|r| r.cover_asset.as_ref());
+    let cover_asset: Option<&Asset> = detail.releases.iter().find_map(|r| r.cover_asset.as_ref());
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         cover_block(ui, app, key, cover_asset);
@@ -225,10 +222,7 @@ fn cover_block(ui: &mut Ui, app: &mut PhonoApp, key: EntryKey, cover_asset: Opti
         let cache = app.detail_cache.as_ref();
         match cache {
             Some(c) => {
-                c.key == key
-                    && c.art_bytes.is_none()
-                    && !c.art_loading
-                    && c.art_error.is_none()
+                c.key == key && c.art_bytes.is_none() && !c.art_loading && c.art_error.is_none()
             }
             None => false,
         }
@@ -238,10 +232,8 @@ fn cover_block(ui: &mut Ui, app: &mut PhonoApp, key: EntryKey, cover_asset: Opti
         // detail payload renders; asset_cache_dir is resolved once at
         // startup), but fall through cleanly if the platform couldn't
         // resolve an OS cache dir.
-        if let (Some(db_path), Some(cache_dir)) = (
-            app.db_path.clone(),
-            app.asset_cache_dir.clone(),
-        ) {
+        if let (Some(db_path), Some(cache_dir)) = (app.db_path.clone(), app.asset_cache_dir.clone())
+        {
             if let Some(cache) = app.detail_cache.as_mut() {
                 cache.art_loading = true;
             }
@@ -262,35 +254,32 @@ fn cover_block(ui: &mut Ui, app: &mut PhonoApp, key: EntryKey, cover_asset: Opti
         .map(|c| (c.art_bytes.clone(), c.art_error.clone()))
         .unwrap_or((None, None));
     let max_side = 280.0_f32;
-    ui.allocate_ui(
-        egui::vec2(ui.available_width(), max_side + 8.0),
-        |ui| {
-            ui.centered_and_justified(|ui| match (&bytes_opt, &error_opt) {
-                (Some(bytes), _) => {
-                    let uri = format!("bytes://album-cover-{}.bin", asset.id);
-                    let img = egui::Image::from_bytes(uri, bytes.clone())
-                        .fit_to_exact_size(egui::vec2(max_side, max_side))
-                        .maintain_aspect_ratio(true);
-                    ui.add(img);
-                }
-                (None, Some(err)) => {
-                    ui.vertical(|ui| {
-                        ui.colored_label(
-                            Color32::LIGHT_RED,
-                            RichText::new("Cover art failed to load").strong(),
-                        );
-                        ui.label(RichText::new(err).monospace().small());
-                        if let Some(url) = asset.source_url.as_deref() {
-                            ui.label(RichText::new(url).monospace().weak().small());
-                        }
-                    });
-                }
-                (None, None) => {
-                    ui.spinner();
-                }
-            });
-        },
-    );
+    ui.allocate_ui(egui::vec2(ui.available_width(), max_side + 8.0), |ui| {
+        ui.centered_and_justified(|ui| match (&bytes_opt, &error_opt) {
+            (Some(bytes), _) => {
+                let uri = format!("bytes://album-cover-{}.bin", asset.id);
+                let img = egui::Image::from_bytes(uri, bytes.clone())
+                    .fit_to_exact_size(egui::vec2(max_side, max_side))
+                    .maintain_aspect_ratio(true);
+                ui.add(img);
+            }
+            (None, Some(err)) => {
+                ui.vertical(|ui| {
+                    ui.colored_label(
+                        Color32::LIGHT_RED,
+                        RichText::new("Cover art failed to load").strong(),
+                    );
+                    ui.label(RichText::new(err).monospace().small());
+                    if let Some(url) = asset.source_url.as_deref() {
+                        ui.label(RichText::new(url).monospace().weak().small());
+                    }
+                });
+            }
+            (None, None) => {
+                ui.spinner();
+            }
+        });
+    });
 }
 
 fn release_block(
@@ -356,8 +345,7 @@ fn disc_block(ui: &mut Ui, app: &mut PhonoApp, disc: &DiscDetail, total_discs: u
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new(format!("Disc {} of {}", disc.disc.disc_number, total_discs))
-                .strong(),
+            RichText::new(format!("Disc {} of {}", disc.disc.disc_number, total_discs)).strong(),
         );
         ui.label(RichText::new(&disc.disc.format).weak());
     });
@@ -433,14 +421,17 @@ fn track_table(ui: &mut Ui, app: &mut PhonoApp, disc: &DiscDetail) {
     let mut clicked_title: Option<String> = None;
 
     TableBuilder::new(ui)
-        .id_salt(("disc_tracks", tracks.first().map(|t| t.disc_id).unwrap_or(0)))
+        .id_salt((
+            "disc_tracks",
+            tracks.first().map(|t| t.disc_id).unwrap_or(0),
+        ))
         .striped(true)
-        .column(Column::exact(24.0))                   // ▶ / ⏹
+        .column(Column::exact(24.0)) // ▶ / ⏹
         .column(Column::initial(28.0).at_least(24.0)) // #
-        .column(Column::remainder().at_least(120.0))   // Title
-        .column(Column::initial(64.0))                  // Length
+        .column(Column::remainder().at_least(120.0)) // Title
+        .column(Column::initial(64.0)) // Length
         .column(if any_artist {
-            Column::initial(120.0).at_least(60.0)       // Artist
+            Column::initial(120.0).at_least(60.0) // Artist
         } else {
             Column::exact(0.0)
         })
@@ -482,8 +473,7 @@ fn track_table(ui: &mut Ui, app: &mut PhonoApp, disc: &DiscDetail) {
                     if any_artist {
                         tr.col(|ui| {
                             ui.add(
-                                Label::new(track.artist_credit.as_deref().unwrap_or(""))
-                                    .truncate(),
+                                Label::new(track.artist_credit.as_deref().unwrap_or("")).truncate(),
                             );
                         });
                     } else {
@@ -646,9 +636,8 @@ fn now_playing_strip(ui: &mut Ui, app: &mut PhonoApp) {
         let right_label_width = 72.0_f32;
         let slider_width = (ui.available_width() - right_label_width).max(40.0);
         ui.spacing_mut().slider_width = slider_width;
-        let slider_resp = ui.add(
-            egui::Slider::new(&mut slider_value, 0.0..=duration_secs).show_value(false),
-        );
+        let slider_resp =
+            ui.add(egui::Slider::new(&mut slider_value, 0.0..=duration_secs).show_value(false));
 
         ui.label(
             RichText::new(format_length(Some(total_frames)))
@@ -832,31 +821,32 @@ fn render_unidentified(ui: &mut Ui, app: &mut PhonoApp, detail: &UnidentifiedDet
 
         ui.horizontal(|ui| {
             if ui.button("Identify now").clicked() {
-                backend::identify::spawn_identify_unidentified(
-                    app,
-                    vec![detail.rip_file.id],
-                );
+                backend::identify::spawn_identify_unidentified(app, vec![detail.rip_file.id]);
             }
         });
     });
 }
 
-fn toc_table(ui: &mut Ui, toc: &phono_junk_core::Toc, sidecar: &phono_junk_lib::sidecar::SidecarData) {
+fn toc_table(
+    ui: &mut Ui,
+    toc: &phono_junk_core::Toc,
+    sidecar: &phono_junk_lib::sidecar::SidecarData,
+) {
     let any_title = !sidecar.cdtext_titles.is_empty();
     let any_performer = !sidecar.cdtext_performers.is_empty();
     TableBuilder::new(ui)
         .id_salt("toc_preview")
         .striped(true)
-        .column(Column::initial(36.0))                        // #
-        .column(Column::initial(80.0))                        // Length
-        .column(Column::initial(100.0))                       // Start LBA
+        .column(Column::initial(36.0)) // #
+        .column(Column::initial(80.0)) // Length
+        .column(Column::initial(100.0)) // Start LBA
         .column(if any_title {
-            Column::remainder().at_least(120.0)               // CD-TEXT title
+            Column::remainder().at_least(120.0) // CD-TEXT title
         } else {
             Column::exact(0.0)
         })
         .column(if any_performer {
-            Column::initial(120.0).at_least(60.0)             // CD-TEXT performer
+            Column::initial(120.0).at_least(60.0) // CD-TEXT performer
         } else {
             Column::exact(0.0)
         })
@@ -925,9 +915,8 @@ fn sidecar_block(ui: &mut Ui, data: &phono_junk_lib::sidecar::SidecarData) {
     }
     // Provenance is rendered separately via `provenance_block`. If that's
     // all we have here, skip — no need for an empty "From sidecar" header.
-    let has_catalog_facts = data.mcn.is_some()
-        || data.cdtext_upc.is_some()
-        || !data.isrcs.is_empty();
+    let has_catalog_facts =
+        data.mcn.is_some() || data.cdtext_upc.is_some() || !data.isrcs.is_empty();
     if !has_catalog_facts {
         return;
     }

@@ -90,11 +90,7 @@ pub fn show(ui: &mut Ui, app: &mut PhonoApp) {
     // A live playback session also keeps the panel mounted so the
     // now-playing strip (rendered at its bottom) survives navigating
     // away from the album that started the track.
-    let now_playing_active = app
-        .player
-        .as_ref()
-        .and_then(|p| p.now_playing())
-        .is_some();
+    let now_playing_active = app.player.as_ref().and_then(|p| p.now_playing()).is_some();
     if app.detail_open && (app.focused_entry.is_some() || now_playing_active) {
         egui::SidePanel::right("detail_panel")
             .resizable(true)
@@ -185,7 +181,11 @@ fn toolbar(ui: &mut Ui, app: &mut PhonoApp) {
         ui.separator();
 
         let album_ids: Vec<_> = app.selected.iter().filter_map(|k| k.album_id()).collect();
-        let rip_ids: Vec<_> = app.selected.iter().filter_map(|k| k.rip_file_id()).collect();
+        let rip_ids: Vec<_> = app
+            .selected
+            .iter()
+            .filter_map(|k| k.rip_file_id())
+            .collect();
         let n_alb = album_ids.len();
         let n_rip = rip_ids.len();
 
@@ -227,7 +227,6 @@ fn toolbar(ui: &mut Ui, app: &mut PhonoApp) {
                 backend::export::spawn_export(app, album_ids.clone(), root);
             }
         }
-
     });
     // db path / unidentified count / load error / status message render
     // in the bottom status bar (see `app::update`) so they don't fall off
@@ -375,7 +374,11 @@ fn apply_year_filter(app: &mut PhonoApp) {
 
 fn opt_string(s: &str) -> Option<String> {
     let t = s.trim();
-    if t.is_empty() { None } else { Some(t.to_string()) }
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
 }
 
 fn table(ui: &mut Ui, app: &mut PhonoApp) {
@@ -395,10 +398,12 @@ fn table(ui: &mut Ui, app: &mut PhonoApp) {
     // Working rows need ~10Hz repaint so the spinner animates without
     // idle CPU burn when nothing is in flight. `request_repaint_after`
     // is cumulative — multiple calls collapse to the earliest.
-    if entries.iter().any(|e| matches!(
-        e,
-        ListEntry::Unidentified(u) if u.state == IdentificationState::Working
-    )) {
+    if entries.iter().any(|e| {
+        matches!(
+            e,
+            ListEntry::Unidentified(u) if u.state == IdentificationState::Working
+        )
+    }) {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(100));
     }
@@ -435,15 +440,15 @@ fn table(ui: &mut Ui, app: &mut PhonoApp) {
                 .vscroll(false)
                 .sense(egui::Sense::click())
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .column(Column::exact(32.0))                     // Status icon
+                .column(Column::exact(32.0)) // Status icon
                 .column(Column::initial(240.0).at_least(240.0)) // Title
                 .column(Column::initial(160.0).at_least(160.0)) // Artist
-                .column(Column::initial(60.0).at_least(60.0))   // Year
-                .column(Column::initial(60.0).at_least(60.0))   // Country
-                .column(Column::initial(60.0).at_least(60.0))   // Lang
+                .column(Column::initial(60.0).at_least(60.0)) // Year
+                .column(Column::initial(60.0).at_least(60.0)) // Country
+                .column(Column::initial(60.0).at_least(60.0)) // Lang
                 .column(Column::initial(140.0).at_least(140.0)) // Label
-                .column(Column::initial(55.0).at_least(55.0))   // Discs
-                .column(Column::initial(70.0).at_least(70.0))   // Releases
+                .column(Column::initial(55.0).at_least(55.0)) // Discs
+                .column(Column::initial(70.0).at_least(70.0)) // Releases
                 .header(24.0, |mut header| {
                     header.col(|ui| table_header::static_header(ui, ""));
                     for (label, key) in [
@@ -520,24 +525,15 @@ fn status_cell(tr: &mut egui_extras::TableRow<'_, '_>, entry: &ListEntry) {
                 IdentificationState::Identified => {
                     // Shouldn't happen in the Unidentified arm, but render
                     // defensively rather than panic.
-                    ui.label(
-                        RichText::new("✓")
-                            .color(egui::Color32::from_rgb(110, 190, 110)),
-                    );
+                    ui.label(RichText::new("✓").color(egui::Color32::from_rgb(110, 190, 110)));
                 }
                 IdentificationState::Unidentified => {
-                    ui.label(
-                        RichText::new("⚠")
-                            .color(egui::Color32::from_rgb(220, 180, 80)),
-                    )
-                    .on_hover_text("No provider returned a match");
+                    ui.label(RichText::new("⚠").color(egui::Color32::from_rgb(220, 180, 80)))
+                        .on_hover_text("No provider returned a match");
                 }
                 IdentificationState::Failed => {
-                    ui.label(
-                        RichText::new("✕")
-                            .color(egui::Color32::from_rgb(220, 100, 100)),
-                    )
-                    .on_hover_text("Identify attempt failed — try again");
+                    ui.label(RichText::new("✕").color(egui::Color32::from_rgb(220, 100, 100)))
+                        .on_hover_text("Identify attempt failed — try again");
                 }
             },
         }
@@ -682,7 +678,11 @@ fn apply_click(
 
 fn row_context_menu(ui: &mut Ui, app: &mut PhonoApp) {
     let album_ids: Vec<_> = app.selected.iter().filter_map(|k| k.album_id()).collect();
-    let rip_ids: Vec<_> = app.selected.iter().filter_map(|k| k.rip_file_id()).collect();
+    let rip_ids: Vec<_> = app
+        .selected
+        .iter()
+        .filter_map(|k| k.rip_file_id())
+        .collect();
     let n_alb = album_ids.len();
     let n_rip = rip_ids.len();
 
@@ -706,10 +706,7 @@ fn row_context_menu(ui: &mut Ui, app: &mut PhonoApp) {
         return;
     }
     if ui
-        .add_enabled(
-            n_alb > 0,
-            egui::Button::new(format!("Re-verify ({n_alb})")),
-        )
+        .add_enabled(n_alb > 0, egui::Button::new(format!("Re-verify ({n_alb})")))
         .clicked()
     {
         backend::verify::spawn_reverify(app, album_ids);
@@ -717,10 +714,7 @@ fn row_context_menu(ui: &mut Ui, app: &mut PhonoApp) {
         return;
     }
     if ui
-        .add_enabled(
-            n_alb > 0,
-            egui::Button::new(format!("Export ({n_alb})...")),
-        )
+        .add_enabled(n_alb > 0, egui::Button::new(format!("Export ({n_alb})...")))
         .clicked()
     {
         if let Some(root) = rfd::FileDialog::new().pick_folder() {

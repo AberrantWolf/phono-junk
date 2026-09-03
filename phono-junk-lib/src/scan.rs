@@ -293,10 +293,11 @@ pub fn identify_one(
     rip_file_id: Id,
     force_refresh: bool,
 ) -> Result<IdentifiedDisc, ScanError> {
-    let rip =
-        crud::get_rip_file(conn, rip_file_id)?.ok_or_else(|| ScanError::Db(DbError::Migration(
-            format!("identify_one: rip_file {rip_file_id} missing"),
-        )))?;
+    let rip = crud::get_rip_file(conn, rip_file_id)?.ok_or_else(|| {
+        ScanError::Db(DbError::Migration(format!(
+            "identify_one: rip_file {rip_file_id} missing"
+        )))
+    })?;
 
     let path = rip
         .cue_path
@@ -331,8 +332,7 @@ pub fn identify_one(
             ScanKind::Chd => SidecarData::default(),
         };
         sidecar::enrich_disc_ids(&mut ids, &sidecar_data);
-        let disc =
-            ctx.identify_disc(conn, &toc, &ids, Some(rip_file_id), force_refresh)?;
+        let disc = ctx.identify_disc(conn, &toc, &ids, Some(rip_file_id), force_refresh)?;
         if let Some(disc_id) = disc.disc_id
             && !sidecar_data.is_empty()
         {
@@ -403,10 +403,7 @@ pub fn ingest_path(
                 return Ok(IngestOutcome::ScannedOnly { rip_file_id });
             }
             let disc = identify_one(ctx, conn, rip_file_id, opts.force_refresh)?;
-            Ok(IngestOutcome::Identified {
-                rip_file_id,
-                disc,
-            })
+            Ok(IngestOutcome::Identified { rip_file_id, disc })
         }
     }
 }
@@ -489,16 +486,16 @@ impl PhonoContext {
                     progress(ScanEvent::CacheHit { path, rip_file_id });
                     continue;
                 }
-                Ok(MetadataOutcome::Ingested {
-                    rip_file_id,
-                    state,
-                }) => {
+                Ok(MetadataOutcome::Ingested { rip_file_id, state }) => {
                     progress(ScanEvent::Ingested {
                         path,
                         rip_file_id,
                         state,
                     });
-                    (rip_file_id, state == IdentificationState::Queued && opts.identify)
+                    (
+                        rip_file_id,
+                        state == IdentificationState::Queued && opts.identify,
+                    )
                 }
                 Err(e) => {
                     summary.failed += 1;

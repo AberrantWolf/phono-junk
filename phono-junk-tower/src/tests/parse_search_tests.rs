@@ -7,7 +7,11 @@ const FIXTURE_HIT: &[u8] = include_bytes!("../../tests/fixtures/search-barcode-h
 #[test]
 fn parse_search_page_returns_single_release_hit() {
     let hits = parse_search_page(FIXTURE_HIT).unwrap();
-    assert_eq!(hits.len(), 1, "fixture should contain exactly one Release hit");
+    assert_eq!(
+        hits.len(),
+        1,
+        "fixture should contain exactly one Release hit"
+    );
     let hit = &hits[0];
     assert_eq!(hit.release_id, 10054881);
     assert_eq!(hit.slug, "Fourplay");
@@ -57,7 +61,10 @@ fn parse_artist_id_strips_slug() {
 
 #[test]
 fn parse_jp_date_handles_full_partial_and_year_only() {
-    assert_eq!(parse_jp_date("1994年8月4日"), Some((1994, Some(8), Some(4))));
+    assert_eq!(
+        parse_jp_date("1994年8月4日"),
+        Some((1994, Some(8), Some(4)))
+    );
     assert_eq!(parse_jp_date("2009年"), Some((2009, None, None)));
     assert_eq!(parse_jp_date("2014年12月"), Some((2014, Some(12), None)));
     assert_eq!(parse_jp_date("not-a-date"), None);

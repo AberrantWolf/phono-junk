@@ -10,8 +10,8 @@ use phono_junk_catalog::Id;
 use phono_junk_db::crud;
 use phono_junk_lib::{
     ExportedDisc, IngestOutcome, ListFilters, ListRow, PhonoContext, ScanEvent, ScanOpts,
-    ScanSummary, UnidentifiedRow, VerifySummary, VerifyTarget, YearSpec, filter_rows,
-    ingest_path, load_list_rows,
+    ScanSummary, UnidentifiedRow, VerifySummary, VerifyTarget, YearSpec, filter_rows, ingest_path,
+    load_list_rows,
 };
 
 use crate::env::{CliEnv, OutputFormat, open_env};
@@ -143,9 +143,7 @@ enum CredentialsAction {
         provider: String,
     },
     /// Remove a provider's token from the keyring and in-memory store.
-    Clear {
-        provider: String,
-    },
+    Clear { provider: String },
     /// List provider names that currently have a token stored. Values
     /// are never printed.
     List,
@@ -169,7 +167,8 @@ fn init_logger(verbose: u8) {
         1 => "info",
         _ => "debug",
     };
-    let mut builder = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level));
+    let mut builder =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level));
     builder.format_timestamp(None).init();
 }
 
@@ -226,7 +225,8 @@ fn run_scan(
     if !root.is_dir() {
         return Err(CliError::MissingPath(root.to_path_buf()));
     }
-    let CliEnv { conn, ctx, .. } = open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
+    let CliEnv { conn, ctx, .. } =
+        open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
     let opts = ScanOpts {
         force_refresh,
         identify: !no_identify,
@@ -322,15 +322,15 @@ fn run_identify(
     force_refresh: bool,
     queued: bool,
 ) -> Result<ExitCode, CliError> {
-    let CliEnv { conn, ctx, .. } = open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
+    let CliEnv { conn, ctx, .. } =
+        open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
 
     if queued {
         return run_identify_queued(&conn, &ctx, fmt, force_refresh);
     }
 
-    let path = path.ok_or_else(|| {
-        CliError::InvalidArg("`identify` requires <path> or --queued".into())
-    })?;
+    let path =
+        path.ok_or_else(|| CliError::InvalidArg("`identify` requires <path> or --queued".into()))?;
     if !path.exists() {
         return Err(CliError::MissingPath(path.to_path_buf()));
     }
@@ -404,7 +404,8 @@ fn identify_output_from_outcome(
             rip_file_id,
             disc_id,
         } => {
-            let (title, artist, year, album_id, release_id) = album_summary_for_disc(conn, disc_id)?;
+            let (title, artist, year, album_id, release_id) =
+                album_summary_for_disc(conn, disc_id)?;
             Ok(IdentifyOutput {
                 rip_file_id,
                 disc_id: Some(disc_id),
@@ -434,10 +435,7 @@ fn identify_output_from_outcome(
             year: None,
             provider_errors: Vec::new(),
         }),
-        IngestOutcome::Identified {
-            rip_file_id,
-            disc,
-        } => {
+        IngestOutcome::Identified { rip_file_id, disc } => {
             let (title, artist, year) = if let Some(album_id) = disc.album_id {
                 album_summary(conn, album_id)?
             } else {
@@ -464,7 +462,16 @@ fn identify_output_from_outcome(
 fn album_summary_for_disc(
     conn: &rusqlite::Connection,
     disc_id: Id,
-) -> Result<(Option<String>, Option<String>, Option<u16>, Option<Id>, Option<Id>), CliError> {
+) -> Result<
+    (
+        Option<String>,
+        Option<String>,
+        Option<u16>,
+        Option<Id>,
+        Option<Id>,
+    ),
+    CliError,
+> {
     let disc = crud::get_disc(conn, disc_id)?;
     let Some(disc) = disc else {
         return Ok((None, None, None, None, None));
@@ -509,7 +516,11 @@ fn format_identify_output(o: &IdentifyOutput) -> String {
         .map(|d| d.to_string())
         .unwrap_or_else(|| "—".into());
     let state = if o.identified {
-        if o.cached { "identified (cached)" } else { "identified" }
+        if o.cached {
+            "identified (cached)"
+        } else {
+            "identified"
+        }
     } else {
         "unidentified"
     };
@@ -545,7 +556,8 @@ fn run_verify(
         }
         (Some(_), Some(_)) => unreachable!("clap conflicts_with"),
     };
-    let CliEnv { conn, ctx, .. } = open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
+    let CliEnv { conn, ctx, .. } =
+        open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
     let summary = ctx.verify_disc(&conn, target)?;
     emit(fmt, &summary, format_verify_summary)?;
     Ok(ExitCode::SUCCESS)
@@ -595,7 +607,8 @@ fn run_export(
     out: &Path,
     dry_run: bool,
 ) -> Result<ExitCode, CliError> {
-    let CliEnv { conn, ctx, .. } = open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
+    let CliEnv { conn, ctx, .. } =
+        open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
     if !out.exists() {
         std::fs::create_dir_all(out)?;
     }
@@ -715,10 +728,7 @@ fn run_audit(cli: &Cli, fmt: OutputFormat, missing_redumper: bool) -> Result<Exi
             .map(|r| AuditMissingRow {
                 rip_file_id: r.rip_file_id,
                 disc_id: r.disc_id,
-                path: r
-                    .cue_path
-                    .or(r.chd_path)
-                    .map(|p| p.display().to_string()),
+                path: r.cue_path.or(r.chd_path).map(|p| p.display().to_string()),
                 ripper: audit::ripper_label(r.ripper),
                 log_path: r.log_path.map(|p| p.display().to_string()),
             })
@@ -747,10 +757,7 @@ fn format_audit_output(o: &AuditOutput) -> String {
             if rows.is_empty() {
                 return "(no rips lacking redumper provenance)".into();
             }
-            let mut lines = vec![format!(
-                "{:>4} {:<40} {:<20} path",
-                "id", "ripper", "log"
-            )];
+            let mut lines = vec![format!("{:>4} {:<40} {:<20} path", "id", "ripper", "log")];
             for r in rows {
                 lines.push(format!(
                     "{:>4} {:<40.40} {:<20.20} {}",
@@ -808,17 +815,21 @@ fn run_credentials(fmt: OutputFormat, action: &CredentialsAction) -> Result<Exit
             // Logs stay quiet on success — token length isn't sensitive but
             // silence is the better default for an interactive credential
             // write. The user pressed Enter; that's their confirmation.
-            emit(fmt, &serde_json::json!({ "provider": provider, "stored": true }), |_| {
-                format!("stored token for {provider}")
-            })?;
+            emit(
+                fmt,
+                &serde_json::json!({ "provider": provider, "stored": true }),
+                |_| format!("stored token for {provider}"),
+            )?;
         }
         CredentialsAction::Clear { provider } => {
             store
                 .clear_from_keyring(provider)
                 .map_err(|e| CliError::InvalidArg(format!("keyring: {e}")))?;
-            emit(fmt, &serde_json::json!({ "provider": provider, "cleared": true }), |_| {
-                format!("cleared token for {provider}")
-            })?;
+            emit(
+                fmt,
+                &serde_json::json!({ "provider": provider, "cleared": true }),
+                |_| format!("cleared token for {provider}"),
+            )?;
         }
         CredentialsAction::List => {
             let providers = store.provider_names();

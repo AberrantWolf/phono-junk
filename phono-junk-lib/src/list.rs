@@ -252,7 +252,10 @@ pub fn filter_rows(rows: Vec<ListRow>, f: &ListFilters) -> Vec<ListRow> {
 /// then unidentified rips (ordered by rip_file id). The GUI consumes this;
 /// CLI sticks with [`load_list_rows`] + `crud::list_unidentified_rip_files`.
 pub fn load_list_entries(conn: &Connection) -> Result<Vec<ListEntry>, DbError> {
-    let mut out: Vec<ListEntry> = load_list_rows(conn)?.into_iter().map(ListEntry::Album).collect();
+    let mut out: Vec<ListEntry> = load_list_rows(conn)?
+        .into_iter()
+        .map(ListEntry::Album)
+        .collect();
     for rf in crud::list_unidentified_rip_files(conn)? {
         let ripper = rf.provenance.as_ref().map(|p| p.ripper);
         out.push(ListEntry::Unidentified(UnidentifiedRow {
@@ -286,10 +289,7 @@ pub fn filter_entries(entries: Vec<ListEntry>, f: &ListFilters) -> Vec<ListEntry
                 if f.missing_redumper_only && u.ripper == Some(Ripper::Redumper) {
                     return false;
                 }
-                f.artist.is_none()
-                    && f.year.is_none()
-                    && f.country.is_none()
-                    && f.label.is_none()
+                f.artist.is_none() && f.year.is_none() && f.country.is_none() && f.label.is_none()
             }
         })
         .collect()
@@ -705,9 +705,7 @@ mod tests {
 
     #[test]
     fn album_has_non_redumper_rip_respects_provenance_state() {
-        use phono_junk_catalog::{
-            Album, Disc, Release, RipFile, RipperProvenance,
-        };
+        use phono_junk_catalog::{Album, Disc, Release, RipFile, RipperProvenance};
         use phono_junk_core::{IdentificationConfidence, IdentificationState};
         use phono_junk_db::{crud, open_memory};
 
@@ -764,11 +762,7 @@ mod tests {
             (album_id, disc_id)
         }
 
-        fn insert_rip(
-            conn: &rusqlite::Connection,
-            disc_id: Id,
-            prov: Option<RipperProvenance>,
-        ) {
+        fn insert_rip(conn: &rusqlite::Connection, disc_id: Id, prov: Option<RipperProvenance>) {
             crud::insert_rip_file(
                 conn,
                 &RipFile {

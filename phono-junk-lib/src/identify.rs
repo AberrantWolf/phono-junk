@@ -192,13 +192,7 @@ impl PhonoContext {
             .ok_or_else(|| IdentifyError::Db(DbError::Migration("release vanished".into())))?;
         let mut disc = crud::get_disc(&txn, disc_id)?
             .ok_or_else(|| IdentifyError::Db(DbError::Migration("disc vanished".into())))?;
-        apply_all_overrides(
-            &txn,
-            &mut album,
-            &mut release,
-            &mut disc,
-            &mut tracks,
-        )?;
+        apply_all_overrides(&txn, &mut album, &mut release, &mut disc, &mut tracks)?;
 
         // Step 8: insert assets (candidates fetched above, pre-txn).
         let asset_count = insert_assets(&txn, release_id, &asset_outcome.candidates)?;
@@ -256,8 +250,9 @@ fn cached_outcome(
     disc: Disc,
     rip_file_id: Option<Id>,
 ) -> Result<IdentifiedDisc, IdentifyError> {
-    let release = crud::get_release(conn, disc.release_id)?
-        .ok_or_else(|| IdentifyError::Db(DbError::Migration("release missing for cached disc".into())))?;
+    let release = crud::get_release(conn, disc.release_id)?.ok_or_else(|| {
+        IdentifyError::Db(DbError::Migration("release missing for cached disc".into()))
+    })?;
     if let Some(rf_id) = rip_file_id {
         update_rip_file(conn, rf_id, disc.id, None)?;
     }
@@ -277,10 +272,7 @@ fn cached_outcome(
 // Catalog upserts
 // ---------------------------------------------------------------------------
 
-fn upsert_album(
-    conn: &Connection,
-    meta: &phono_junk_identify::AlbumMeta,
-) -> Result<Id, DbError> {
+fn upsert_album(conn: &Connection, meta: &phono_junk_identify::AlbumMeta) -> Result<Id, DbError> {
     if let Some(mbid) = meta.mbid.as_deref() {
         if let Some(existing) = find_album_by_mbid(conn, mbid)? {
             return Ok(existing.id);
@@ -538,13 +530,7 @@ fn apply_all_overrides(
         changed_release = true;
     }
     for ovr in crud::list_overrides_for(conn, "Disc", disc.id)? {
-        apply_override(
-            OverrideTarget::Disc {
-                disc,
-                tracks,
-            },
-            &ovr,
-        )?;
+        apply_override(OverrideTarget::Disc { disc, tracks }, &ovr)?;
         changed_disc_or_tracks = true;
     }
     for t in tracks.iter_mut() {
@@ -680,10 +666,7 @@ fn persist_identify_attempt(
 /// Detail strings are truncated so a verbose backend response can't bloat the
 /// catalog row; the GUI shows full strings either way (text wraps, but
 /// pathological responses would still hurt list rendering).
-pub(crate) fn humanize_provider_error(
-    name: &str,
-    err: &ProviderError,
-) -> IdentifyAttemptError {
+pub(crate) fn humanize_provider_error(name: &str, err: &ProviderError) -> IdentifyAttemptError {
     let message = match err {
         ProviderError::Network(s) => format!("network error: {}", truncate(s, 80)),
         ProviderError::Auth(_) => "authentication failed".to_string(),
@@ -715,4 +698,3 @@ fn first_source(sources: &[String]) -> Option<IdentificationSource> {
         other => IdentificationSource::Other(other.to_string()),
     })
 }
-

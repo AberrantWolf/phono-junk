@@ -354,10 +354,7 @@ mod tests {
         .unwrap()
     }
 
-    fn insert_unidentified_rip(
-        conn: &rusqlite::Connection,
-        cue: &str,
-    ) -> phono_junk_catalog::Id {
+    fn insert_unidentified_rip(conn: &rusqlite::Connection, cue: &str) -> phono_junk_catalog::Id {
         crud::insert_rip_file(
             conn,
             &RipFile {

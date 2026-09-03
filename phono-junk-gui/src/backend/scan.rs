@@ -31,7 +31,10 @@ pub fn spawn_scan(app: &mut PhonoApp, root: PathBuf) {
     // no-op, so repeated "Add folder…" clicks on the same tree are safe.
     if let Some(conn) = app.db_conn.as_ref() {
         if let Err(e) = crud::insert_library_folder(conn, &root) {
-            log::warn!("scan: failed to persist library folder {}: {e}", root.display());
+            log::warn!(
+                "scan: failed to persist library folder {}: {e}",
+                root.display()
+            );
         }
     }
 
@@ -84,9 +87,7 @@ pub fn spawn_scan(app: &mut PhonoApp, root: PathBuf) {
             // list updates as rows land rather than only at the end.
             match &event {
                 ScanEvent::Ingested {
-                    rip_file_id,
-                    state,
-                    ..
+                    rip_file_id, state, ..
                 } => {
                     let _ = tx_for_cb.send(AppMessage::LibraryChanged);
                     if *state == IdentificationState::Queued {
@@ -133,12 +134,7 @@ pub fn spawn_scan(app: &mut PhonoApp, root: PathBuf) {
                 // in insert order so the Status column animates
                 // top-down as each provider call finishes.
                 for rf_id in queued_ids {
-                    enqueue_for_identify(
-                        app_tx.clone(),
-                        phono_ctx.clone(),
-                        db_path.clone(),
-                        rf_id,
-                    );
+                    enqueue_for_identify(app_tx.clone(), phono_ctx.clone(), db_path.clone(), rf_id);
                 }
             }
             Err(e) => {
@@ -157,7 +153,10 @@ fn log_event(event: &ScanEvent<'_>) {
             log::debug!("scan: found {}", path.display());
         }
         ScanEvent::CacheHit { path, rip_file_id } => {
-            log::debug!("scan: cache hit {} (rip_file_id={rip_file_id})", path.display());
+            log::debug!(
+                "scan: cache hit {} (rip_file_id={rip_file_id})",
+                path.display()
+            );
         }
         ScanEvent::Ingested {
             path,

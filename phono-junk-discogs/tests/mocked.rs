@@ -36,7 +36,10 @@ fn client_pointing_at(server: &MockServer) -> HttpClient {
     // supported it. It doesn't (see the Sprint 13 deferred item on
     // per-host URL rewriting in TODO.md), so instead we run the provider
     // against a URL we hand-build to the mock server.
-    HttpClient::builder().user_agent("phono-junk-test/0.1").build().unwrap()
+    HttpClient::builder()
+        .user_agent("phono-junk-test/0.1")
+        .build()
+        .unwrap()
 }
 
 #[test]
@@ -81,7 +84,10 @@ fn provider_sends_authorization_header_and_round_trips_hit() {
 
     // Ensure token text never leaks via the response's debug output.
     let dbg = format!("{:?}", resp);
-    assert!(!dbg.contains("integration-secret"), "resp debug leaked: {dbg}");
+    assert!(
+        !dbg.contains("integration-secret"),
+        "resp debug leaked: {dbg}"
+    );
     // Fixture content is fine — just the token string itself must not
     // be present on the response struct (headers aren't stored on it
     // today; this guards against a future regression).
@@ -104,7 +110,10 @@ fn provider_maps_401_to_auth_error() {
     let client = client_pointing_at(&server);
     let headers = [(AUTHORIZATION, HeaderValue::from_static("Discogs token=bad"))];
     let resp = client
-        .get_with_headers(&server.url("/database/search?type=release&barcode=x"), &headers)
+        .get_with_headers(
+            &server.url("/database/search?type=release&barcode=x"),
+            &headers,
+        )
         .unwrap();
     assert_eq!(resp.status, 401);
 

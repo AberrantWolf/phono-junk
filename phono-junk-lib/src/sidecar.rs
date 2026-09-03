@@ -21,9 +21,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use junk_libs_disc::redumper::{self, CdText, RedumperLog, Ripper, Sidecars};
-use phono_junk_catalog::{
-    Disagreement, Id, RipperProvenance,
-};
+use phono_junk_catalog::{Disagreement, Id, RipperProvenance};
 use phono_junk_core::{DiscIds, IdentificationSource};
 use phono_junk_db::{DbError, crud};
 use rusqlite::Connection;
@@ -156,10 +154,7 @@ fn absorb_cdtext(data: &mut SidecarData, ct: &CdText) {
 pub fn enrich_disc_ids(ids: &mut DiscIds, data: &SidecarData) {
     if ids.barcode.is_none() {
         // Prefer the log's MCN; fall back to CD-TEXT's UPC/EAN.
-        ids.barcode = data
-            .mcn
-            .clone()
-            .or_else(|| data.cdtext_upc.clone());
+        ids.barcode = data.mcn.clone().or_else(|| data.cdtext_upc.clone());
     }
 }
 
@@ -271,9 +266,8 @@ pub fn refresh_for_cache_hit(
         // target field is empty. We can't easily detect "nothing changed"
         // without re-reading before/after, so we conservatively report
         // changed=true when any catalog-facing sidecar fact exists.
-        let has_catalog_facts = data.mcn.is_some()
-            || !data.isrcs.is_empty()
-            || data.cdtext_upc.is_some();
+        let has_catalog_facts =
+            data.mcn.is_some() || !data.isrcs.is_empty() || data.cdtext_upc.is_some();
         if has_catalog_facts {
             apply_sidecar_to_catalog(conn, disc_id, &data)?;
             changed = true;

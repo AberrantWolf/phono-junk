@@ -26,10 +26,7 @@ fn snapshot_credentials_debug_does_not_leak() {
     store.set("discogs", SECRET);
     let snapshot: Credentials = store.to_credentials();
     let dbg = format!("{:?}", snapshot);
-    assert!(
-        !dbg.contains(SECRET),
-        "snapshot debug leaked secret: {dbg}"
-    );
+    assert!(!dbg.contains(SECRET), "snapshot debug leaked secret: {dbg}");
 }
 
 #[test]

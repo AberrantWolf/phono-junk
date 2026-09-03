@@ -44,7 +44,10 @@ pub struct AuditSummary {
 impl AuditSummary {
     /// Count of rips sourced by redumper — the happy-path number.
     pub fn redumper_count(&self) -> usize {
-        self.by_ripper.get(&Some(Ripper::Redumper)).copied().unwrap_or(0)
+        self.by_ripper
+            .get(&Some(Ripper::Redumper))
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Rips without confirmed redumper provenance — the audit target.
