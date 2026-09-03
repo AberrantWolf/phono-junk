@@ -66,7 +66,7 @@ impl AssetProvider for ITunesProvider {
 
         let term = format!("{artist} {title}");
         let url = build_search_url(&term)?;
-        let resp = self.http.get(url.as_str()).map_err(map_http_err)?;
+        let resp = self.http.get(&url).map_err(map_http_err)?;
         match resp.status {
             200 => parse_search_response(&resp.body),
             404 => Ok(Vec::new()),

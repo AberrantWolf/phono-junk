@@ -71,10 +71,10 @@ pub fn open_env(
     need_network: bool,
 ) -> Result<CliEnv, CliError> {
     let db_path = resolve_db_path(db_flag)?;
-    if let Some(parent) = db_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = db_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
     }
     let conn = phono_junk_db::open_database(&db_path)?;
     let ctx = if need_network {
@@ -101,9 +101,9 @@ pub fn open_env(
 /// credential store. Empty strings are ignored (avoids accidentally clearing
 /// a keyring-stored token with `PHONO_DISCOGS_TOKEN=`).
 fn overlay_env_credentials(ctx: &PhonoContext) {
-    if let Ok(token) = std::env::var("PHONO_DISCOGS_TOKEN") {
-        if !token.is_empty() {
-            ctx.credentials.set("discogs", token);
-        }
+    if let Ok(token) = std::env::var("PHONO_DISCOGS_TOKEN")
+        && !token.is_empty()
+    {
+        ctx.credentials.set("discogs", token);
     }
 }

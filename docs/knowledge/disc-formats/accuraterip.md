@@ -1,6 +1,6 @@
 # AccurateRip CRC Verification
 
-AccurateRip is a community-maintained database of per-track CD audio checksums. Its purpose is **verification** — confirming that a local rip is bit-identical to the same track ripped by other people with correctly-offset drives. It does not identify discs (that's what [DiscID](DiscID.md) is for); given a disc ID, AccurateRip returns N expected checksums per track and a "confidence" count of how many submitters produced that checksum.
+AccurateRip is a community-maintained database of per-track CD audio checksums. Its purpose is **verification** — confirming that a local rip is bit-identical to the same track ripped by other people with correctly-offset drives. It does not identify discs (that's what [disc IDs](disc-ids.md) are for); given a disc ID, AccurateRip returns N expected checksums per track and a "confidence" count of how many submitters produced that checksum.
 
 A track with confidence `≥ 2` from independent submitters is strong evidence that your rip is bit-perfect.
 
@@ -8,7 +8,10 @@ A track with confidence `≥ 2` from independent submitters is strong evidence t
 
 AccurateRip originally used a single checksum (v1). The v1 algorithm has a known flaw — about 3% of the right-channel data is effectively ignored due to a 32-bit multiplication overflow truncation. v2 fixes this by accumulating both halves of the 64-bit product.
 
-The database stores both. Modern rippers compute and submit both. Verification checks both independently; a match in either is acceptable, a match in v2 is preferred.
+Modern tools compute both variants, but a dBAR track entry stores one unlabeled
+primary checksum. It may be either ARv1 or ARv2. Verification therefore compares
+the locally computed ARv2 first and ARv1 second against that same primary field.
+This is the behavior implemented independently by CUETools and ARver.
 
 ## Sample layout
 
@@ -79,10 +82,10 @@ and are cross-verified via ARver's `tests/checksums_test.py` fixture CRCs.
 
 ## dBAR file: the database response
 
-Given the three [disc IDs](DiscID.md), fetch:
+Given the three [disc IDs](disc-ids.md), fetch:
 
 ```
-http://www.accuraterip.com/accuraterip/<id1_last>/<id1_2nd_last>/<id1_3rd_last>/dBAR-<NNN>-<id1>-<id2>-<cddbid>.bin
+https://www.accuraterip.com/accuraterip/<id1_last>/<id1_2nd_last>/<id1_3rd_last>/dBAR-<NNN>-<id1>-<id2>-<cddbid>.bin
 ```
 
 The response is a binary `.bin` file containing one or more **Responses** concatenated. Each Response represents one "pressing" (one submitter's rip of a disc that claimed this same triple of IDs):
@@ -96,13 +99,16 @@ Response {
         u32  cddb_id
     TrackEntry[track_count]:
         u8   confidence                 # how many submitters agreed with this checksum
-        u32  v1_checksum
-        u32  v2_checksum                # (may be 0 for older submissions)
+        u32  checksum                    # primary: ARv1 or ARv2, unlabeled
+        u32  checksum_450                # frame-450 offset evidence
         # total 9 bytes per track
 }
 ```
 
-A single disc typically has 2–10 Responses stacked in one `.bin` — different pressings, different submitters, or different drive offsets. Match your computed `v1` or `v2` checksum against any TrackEntry across all Responses; a hit at any confidence level is a positive match.
+A single disc may have multiple Responses stacked in one `.bin`. Compare both
+local algorithms with `checksum`; `checksum_450` is a separate checksum around
+frame 450 used to help find offsets. Equality with `checksum_450` alone never
+verifies a full track.
 
 ### Interpreting "confidence"
 
@@ -117,9 +123,10 @@ Reporting this raw number to the user is more useful than thresholding it; they 
 
 ## Implementation notes (for `phono-junk-accuraterip`)
 
-- **Streaming is fine**: compute both v1 and v2 in a single pass over the PCM. No need to buffer a whole track.
+- **Streaming is fine**: compute both v1 and v2 in a single pass over the PCM. Offset search additionally retains bounded adjacent-track windows.
 - **Handle the triple-skip case**: single-track discs apply both the start-skip (2940) and end-skip (2940) simultaneously. Most rips won't hit this, but test for it.
-- **Offset compensation** (advanced, v2+): the multiplication-by-position structure means if you compute `SA = Σ(sample × i)` and `SB = Σ(sample)` once, you can derive the CRC at any integer sample-offset shift `Δ` via `CRC(Δ) = SA + Δ × SB`. This lets you test thousands of drive-offset candidates in one pass — useful for "find my drive's offset" features. Out of scope for MVP; skip for day 1.
+- **Offset search**: CUETools searches `-2939..=2939` stereo samples (`5*588-1`). In phono-junk, a positive shift means selecting later PCM samples from the reconstructed disc stream. Internal-track checks must borrow samples from the adjacent tracks while preserving the first/last-disc five-frame exclusion.
+- **Offset acceleration**: weighted sums can be updated with cumulative sums, keeping the search linear in PCM size plus tracks × offset range rather than rereading every track for every shift.
 - **Failure modes**: drive offset mismatch, non-audio track fed in, data-track-misidentified-as-audio, and silence-padding differences all produce wrong CRCs. The correct response is "no match found" — don't guess; show the user what was computed vs. expected.
 - **Verification is independent of identification**: you can compute AccurateRip CRCs without knowing MusicBrainz DiscID, and vice versa. They answer different questions.
 
@@ -129,6 +136,7 @@ Reporting this raw number to the user is more useful than thresholding it; they 
 - [leo-bogert/accuraterip-checksum](https://github.com/leo-bogert/accuraterip-checksum) — the cleanest public C reference implementation of CRC v1 and v2. The entire calculation is in [accuraterip-checksum.c](https://github.com/leo-bogert/accuraterip-checksum/blob/master/accuraterip-checksum.c).
 - [arcctgx/ARver](https://github.com/arcctgx/ARver) — a maintained Python implementation. [`arver/audio/checksums.py`](https://github.com/arcctgx/ARver/blob/master/arver/audio/checksums.py) mirrors the C source closely and is easier to read.
 - [arcctgx/ARver — database.py](https://github.com/arcctgx/ARver/blob/master/arver/disc/database.py) — dBAR URL construction and binary response parsing.
+- [CUETools AccurateRip.cs](https://github.com/gchudov/cuetools.net/blob/master/CUETools.AccurateRip/AccurateRip.cs) — primary checksum matching and the distinct frame-450 field.
 - [sbooth's AccurateRip gist](https://gist.github.com/sbooth/331559) — Objective-C port with the offset-compensated-sum variant (`SA`, `SB` structure) explicitly written out.
 - [Jonas Lundqvist — Calculating AccurateRip checksums (2009)](https://jonls.dk/2009/10/calculating-accuraterip-checksums/) — a blog-length derivation of the v1 algorithm and its overflow bug. Sometimes rate-limited; archive copies exist.
 - [dBpoweramp developer forum — AccurateRip CRC Calculation](https://forum.dbpoweramp.com/forum/other-topics/developers-corner/20117-accuraterip-crc-calculation) — original reverse-engineering discussion, referenced by most later implementations.

@@ -54,7 +54,7 @@ pub enum Segment {
 pub fn parse_sub_path(input: Option<&str>) -> Result<Vec<Segment>, OverrideError> {
     let s = match input {
         None => return Ok(Vec::new()),
-        Some(s) if s.is_empty() => return Ok(Vec::new()),
+        Some("") => return Ok(Vec::new()),
         Some(s) => s,
     };
     s.split('.').map(parse_segment).collect()

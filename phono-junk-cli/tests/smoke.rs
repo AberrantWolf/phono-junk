@@ -32,10 +32,10 @@ fn toc_fixtures_dir() -> PathBuf {
 }
 
 fn ensure_sparse(path: &Path, len: u64) {
-    if let Ok(meta) = std::fs::metadata(path) {
-        if meta.len() == len {
-            return;
-        }
+    if let Ok(meta) = std::fs::metadata(path)
+        && meta.len() == len
+    {
+        return;
     }
     let f: File = OpenOptions::new()
         .create(true)

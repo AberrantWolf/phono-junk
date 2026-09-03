@@ -459,19 +459,19 @@ fn identify_output_from_outcome(
     }
 }
 
+type AlbumSummary = (Option<String>, Option<String>, Option<u16>);
+type DiscAlbumSummary = (
+    Option<String>,
+    Option<String>,
+    Option<u16>,
+    Option<Id>,
+    Option<Id>,
+);
+
 fn album_summary_for_disc(
     conn: &rusqlite::Connection,
     disc_id: Id,
-) -> Result<
-    (
-        Option<String>,
-        Option<String>,
-        Option<u16>,
-        Option<Id>,
-        Option<Id>,
-    ),
-    CliError,
-> {
+) -> Result<DiscAlbumSummary, CliError> {
     let disc = crud::get_disc(conn, disc_id)?;
     let Some(disc) = disc else {
         return Ok((None, None, None, None, None));
@@ -493,10 +493,7 @@ fn album_summary_for_disc(
     }
 }
 
-fn album_summary(
-    conn: &rusqlite::Connection,
-    album_id: Id,
-) -> Result<(Option<String>, Option<String>, Option<u16>), CliError> {
+fn album_summary(conn: &rusqlite::Connection, album_id: Id) -> Result<AlbumSummary, CliError> {
     let album = crud::get_album(conn, album_id)?;
     Ok(match album {
         Some(a) => (Some(a.title), a.artist_credit, a.year),

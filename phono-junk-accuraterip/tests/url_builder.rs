@@ -5,7 +5,7 @@
 //! format string:
 //!
 //! ```python
-//! 'http://www.accuraterip.com/accuraterip/{0}/{1}/{2}/dBAR-{3:03d}-{4}-{5}-{6}.bin'
+//! 'https://www.accuraterip.com/accuraterip/{0}/{1}/{2}/dBAR-{3:03d}-{4}-{5}-{6}.bin'
 //! .format(discid1[-1], discid1[-2], discid1[-3],
 //!         num_tracks, discid1, discid2, freedb_id)
 //! ```
@@ -29,18 +29,18 @@ fn arver_3_track_fixture_matches_reference_format() {
     let ids = ids_with("00084264", "001cc184", "19117f03");
     let url = dbar_url(&ids, 3).expect("url");
     assert_eq!(
-        url,
-        "http://www.accuraterip.com/accuraterip/4/6/2/dBAR-003-00084264-001cc184-19117f03.bin"
+        url.as_str(),
+        "https://www.accuraterip.com/accuraterip/4/6/2/dBAR-003-00084264-001cc184-19117f03.bin"
     );
 }
 
 #[test]
 fn track_count_is_zero_padded_to_three_digits() {
     let ids = ids_with("00084264", "001cc184", "19117f03");
-    assert!(dbar_url(&ids, 1).unwrap().contains("dBAR-001-"));
-    assert!(dbar_url(&ids, 10).unwrap().contains("dBAR-010-"));
-    assert!(dbar_url(&ids, 99).unwrap().contains("dBAR-099-"));
-    assert!(dbar_url(&ids, 100).unwrap().contains("dBAR-100-"));
+    assert!(dbar_url(&ids, 1).unwrap().as_str().contains("dBAR-001-"));
+    assert!(dbar_url(&ids, 10).unwrap().as_str().contains("dBAR-010-"));
+    assert!(dbar_url(&ids, 99).unwrap().as_str().contains("dBAR-099-"));
+    assert!(dbar_url(&ids, 100).unwrap().as_str().contains("dBAR-100-"));
 }
 
 #[test]

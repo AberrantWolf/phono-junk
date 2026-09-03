@@ -4,7 +4,7 @@
 //! [`arver/disc/database.py`](https://github.com/arcctgx/ARver/blob/master/arver/disc/database.py):
 //!
 //! ```text
-//! http://www.accuraterip.com/accuraterip/<id1[-1]>/<id1[-2]>/<id1[-3]>/dBAR-<NNN>-<id1>-<id2>-<cddb>.bin
+//! https://www.accuraterip.com/accuraterip/<id1[-1]>/<id1[-2]>/<id1[-3]>/dBAR-<NNN>-<id1>-<id2>-<cddb>.bin
 //! ```
 //!
 //! `id1`, `id2`, and `cddb` are the lowercase 8-char hex strings produced by
@@ -12,6 +12,7 @@
 //! track count.
 
 use phono_junk_core::DiscIds;
+use url::Url;
 
 use crate::error::AccurateRipError;
 
@@ -19,7 +20,7 @@ pub const ACCURATERIP_HOST: &str = "www.accuraterip.com";
 
 /// Build the dBAR lookup URL for a disc. Returns [`AccurateRipError::MissingId`]
 /// when any of the three required IDs is absent from `ids`.
-pub fn dbar_url(ids: &DiscIds, track_count: u8) -> Result<String, AccurateRipError> {
+pub fn dbar_url(ids: &DiscIds, track_count: u8) -> Result<Url, AccurateRipError> {
     let id1 = ids
         .ar_discid1
         .as_deref()
@@ -46,7 +47,8 @@ pub fn dbar_url(ids: &DiscIds, track_count: u8) -> Result<String, AccurateRipErr
     let b = chars[n - 2];
     let c = chars[n - 3];
 
-    Ok(format!(
-        "http://{ACCURATERIP_HOST}/accuraterip/{a}/{b}/{c}/dBAR-{track_count:03}-{id1}-{id2}-{cddb}.bin",
+    Url::parse(&format!(
+        "https://{ACCURATERIP_HOST}/accuraterip/{a}/{b}/{c}/dBAR-{track_count:03}-{id1}-{id2}-{cddb}.bin",
     ))
+    .map_err(|e| AccurateRipError::Parse(format!("invalid AccurateRip URL: {e}")))
 }

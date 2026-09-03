@@ -95,7 +95,7 @@ fn row_to_album(row: &Row) -> rusqlite::Result<Album> {
     let secondary_types_json: Option<String> = row.get("secondary_types_json")?;
     let secondary_types: Vec<String> = secondary_types_json
         .as_deref()
-        .map(|s| serde_json::from_str(s))
+        .map(serde_json::from_str)
         .transpose()
         .map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))

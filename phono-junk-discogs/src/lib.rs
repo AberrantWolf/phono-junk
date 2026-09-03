@@ -121,7 +121,7 @@ impl IdentificationProvider for DiscogsProvider {
         let headers = auth_headers(token)?;
         let resp = self
             .http()?
-            .get_with_headers(url.as_str(), &headers)
+            .get_with_headers(&url, &headers)
             .map_err(map_http_err)?;
         match resp.status {
             200 => parse_search_response(&resp.body),
@@ -156,7 +156,7 @@ impl AssetProvider for DiscogsProvider {
         let headers = auth_headers(token)?;
         let resp = self
             .http()?
-            .get_with_headers(url.as_str(), &headers)
+            .get_with_headers(&url, &headers)
             .map_err(map_http_err)?;
         if resp.status != 200 {
             // Silent on asset-side failures — identify already logged it.
@@ -380,7 +380,7 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         assert_eq!(q.get("barcode").map(String::as_str), Some("123"));
-        assert!(q.get("catno").is_none());
+        assert!(!q.contains_key("catno"));
     }
 
     #[test]

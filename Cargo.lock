@@ -4001,6 +4001,7 @@ dependencies = [
  "phono-junk-identify",
  "reqwest",
  "thiserror 2.0.18",
+ "url",
 ]
 
 [[package]]

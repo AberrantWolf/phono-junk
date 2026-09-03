@@ -24,7 +24,7 @@ struct MockIdentifier {
 }
 
 enum MockOutcome {
-    Some(ProviderResult),
+    Some(Box<ProviderResult>),
     None,
     Error(&'static str),
 }
@@ -51,7 +51,7 @@ impl IdentificationProvider for MockIdentifier {
         _creds: &Credentials,
     ) -> Result<Option<ProviderResult>, ProviderError> {
         match &self.outcome {
-            MockOutcome::Some(r) => Ok(Some(r.clone())),
+            MockOutcome::Some(r) => Ok(Some((**r).clone())),
             MockOutcome::None => Ok(None),
             MockOutcome::Error(msg) => Err(ProviderError::Other((*msg).to_string())),
         }
@@ -82,17 +82,17 @@ fn discid_ids() -> DiscIds {
 fn all_ok_results_returned_in_provider_order() {
     let a: Box<dyn IdentificationProvider> = Box::new(MockIdentifier::new(
         "a",
-        MockOutcome::Some(ProviderResult {
+        MockOutcome::Some(Box::new(ProviderResult {
             provider: "a".into(),
             ..Default::default()
-        }),
+        })),
     ));
     let b: Box<dyn IdentificationProvider> = Box::new(MockIdentifier::new(
         "b",
-        MockOutcome::Some(ProviderResult {
+        MockOutcome::Some(Box::new(ProviderResult {
             provider: "b".into(),
             ..Default::default()
-        }),
+        })),
     ));
     let providers = vec![a, b];
     let results = identify_parallel(
@@ -112,10 +112,10 @@ fn one_failure_does_not_block_others() {
         Box::new(MockIdentifier::new("a", MockOutcome::Error("boom")));
     let b: Box<dyn IdentificationProvider> = Box::new(MockIdentifier::new(
         "b",
-        MockOutcome::Some(ProviderResult {
+        MockOutcome::Some(Box::new(ProviderResult {
             provider: "b".into(),
             ..Default::default()
-        }),
+        })),
     ));
     let providers = vec![a, b];
     let results = identify_parallel(

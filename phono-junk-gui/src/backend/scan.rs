@@ -29,13 +29,13 @@ pub fn spawn_scan(app: &mut PhonoApp, root: PathBuf) {
     // Register the folder as a tracked library root so subsequent app
     // opens auto-rescan it. Idempotent — re-adding a known path is a
     // no-op, so repeated "Add folder…" clicks on the same tree are safe.
-    if let Some(conn) = app.db_conn.as_ref() {
-        if let Err(e) = crud::insert_library_folder(conn, &root) {
-            log::warn!(
-                "scan: failed to persist library folder {}: {e}",
-                root.display()
-            );
-        }
+    if let Some(conn) = app.db_conn.as_ref()
+        && let Err(e) = crud::insert_library_folder(conn, &root)
+    {
+        log::warn!(
+            "scan: failed to persist library folder {}: {e}",
+            root.display()
+        );
     }
 
     let phono_ctx = app.phono_ctx.clone();

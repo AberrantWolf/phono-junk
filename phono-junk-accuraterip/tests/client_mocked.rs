@@ -10,6 +10,7 @@
 use httpmock::prelude::*;
 use phono_junk_accuraterip::{AccurateRipClient, AccurateRipError, ExpectedCrc};
 use phono_junk_identify::HttpClient;
+use url::Url;
 
 fn client() -> AccurateRipClient {
     let http = HttpClient::builder()
@@ -34,6 +35,10 @@ fn minimal_dbar_bytes() -> Vec<u8> {
 
 const PATH: &str = "/accuraterip/4/6/2/dBAR-001-00084264-001cc184-19117f03.bin";
 
+fn server_url(server: &MockServer) -> Url {
+    Url::parse(&server.url(PATH)).unwrap()
+}
+
 #[test]
 fn status_200_parses_body() {
     let server = MockServer::start();
@@ -43,7 +48,10 @@ fn status_200_parses_body() {
         then.status(200).body(body.clone());
     });
 
-    let parsed = client().fetch_at_url(&server.url(PATH)).unwrap().unwrap();
+    let parsed = client()
+        .fetch_at_url(&server_url(&server))
+        .unwrap()
+        .unwrap();
     mock.assert();
     assert_eq!(parsed.responses.len(), 1);
     assert_eq!(
@@ -64,7 +72,7 @@ fn status_404_yields_none() {
         then.status(404);
     });
 
-    let result = client().fetch_at_url(&server.url(PATH)).unwrap();
+    let result = client().fetch_at_url(&server_url(&server)).unwrap();
     mock.assert();
     assert!(result.is_none(), "expected Ok(None) for 404");
 }
@@ -77,7 +85,7 @@ fn status_500_errors_with_code_in_message() {
         then.status(500).body("boom");
     });
 
-    let err = client().fetch_at_url(&server.url(PATH)).unwrap_err();
+    let err = client().fetch_at_url(&server_url(&server)).unwrap_err();
     mock.assert();
     match err {
         AccurateRipError::Parse(msg) => assert!(msg.contains("500"), "msg: {msg}"),
@@ -94,7 +102,7 @@ fn status_200_with_bad_body_surfaces_parse_error() {
         then.status(200).body([0x03u8, 0x00]);
     });
 
-    let err = client().fetch_at_url(&server.url(PATH)).unwrap_err();
+    let err = client().fetch_at_url(&server_url(&server)).unwrap_err();
     mock.assert();
     assert!(matches!(err, AccurateRipError::Parse(_)));
 }

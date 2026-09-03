@@ -41,10 +41,10 @@ pub fn encode_flac_track(
     cover_jpeg: Option<&[u8]>,
     out_path: &Path,
 ) -> Result<(), ExtractError> {
-    if let Some(parent) = out_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| ExtractError::io(parent, e))?;
-        }
+    if let Some(parent) = out_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(|e| ExtractError::io(parent, e))?;
     }
 
     encode_audio_stream(pcm, total_samples, out_path)?;

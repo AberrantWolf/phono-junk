@@ -333,10 +333,11 @@ pub fn cache_asset_bytes(
     asset: &Asset,
     cache_dir: &Path,
 ) -> Result<Vec<u8>, ExportError> {
-    if let Some(path) = asset.file_path.as_ref() {
-        if path.is_absolute() && path.exists() {
-            return fs::read(path).map_err(|e| ExportError::io(path.clone(), e));
-        }
+    if let Some(path) = asset.file_path.as_ref()
+        && path.is_absolute()
+        && path.exists()
+    {
+        return fs::read(path).map_err(|e| ExportError::io(path.clone(), e));
         // Absolute-but-missing, or a legacy library-root-relative path left
         // over from pre-cache-unification DBs: fall through to re-fetch.
     }
@@ -349,8 +350,11 @@ pub fn cache_asset_bytes(
         .ok_or(ExtractPrimitiveError::InvalidTrack(
             "asset has neither file_path nor source_url".into(),
         ))?;
+    let parsed_url = url::Url::parse(url).map_err(|_| {
+        ExtractPrimitiveError::InvalidTrack("asset source_url is not a valid URL".into())
+    })?;
     let http = ctx.http.as_ref().ok_or(ExportError::NoHttpClient)?;
-    let resp = http.get(url)?;
+    let resp = http.get(&parsed_url)?;
     if !(200..300).contains(&resp.status) {
         return Err(ExportError::AssetFetchStatus {
             asset_id: asset.id,

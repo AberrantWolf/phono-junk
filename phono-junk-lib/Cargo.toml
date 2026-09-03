@@ -33,9 +33,9 @@ rusqlite.workspace = true
 walkdir.workspace = true
 chrono.workspace = true
 keyring.workspace = true
+url.workspace = true
 
 [dev-dependencies]
-url.workspace = true
 tempfile.workspace = true
 claxon = "0.4"
 metaflac = "0.2"

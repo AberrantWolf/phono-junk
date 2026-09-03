@@ -178,13 +178,12 @@ impl PhonoApp {
             );
             return;
         };
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                if let Err(e) = std::fs::create_dir_all(parent) {
-                    self.load_error = Some(format!("create {}: {e}", parent.display()));
-                    return;
-                }
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            self.load_error = Some(format!("create {}: {e}", parent.display()));
+            return;
         }
         // Remember the path even if open fails (e.g. VersionMismatch after a
         // schema bump) so the user can use the Reset DB button to recover
@@ -226,11 +225,11 @@ impl PhonoApp {
                 s.push(suffix);
                 PathBuf::from(s)
             };
-            if p.exists() {
-                if let Err(e) = std::fs::remove_file(&p) {
-                    self.load_error = Some(format!("reset: remove {}: {e}", p.display()));
-                    return;
-                }
+            if p.exists()
+                && let Err(e) = std::fs::remove_file(&p)
+            {
+                self.load_error = Some(format!("reset: remove {}: {e}", p.display()));
+                return;
             }
         }
 
@@ -302,16 +301,16 @@ impl PhonoApp {
                     })
                     .collect();
                 self.selected.retain(|k| valid.contains(k));
-                if let Some(anchor) = self.selection_anchor {
-                    if !valid.contains(&anchor) {
-                        self.selection_anchor = None;
-                    }
+                if let Some(anchor) = self.selection_anchor
+                    && !valid.contains(&anchor)
+                {
+                    self.selection_anchor = None;
                 }
-                if let Some(focus) = self.focused_entry {
-                    if !valid.contains(&focus) {
-                        self.focused_entry = None;
-                        self.detail_cache = None;
-                    }
+                if let Some(focus) = self.focused_entry
+                    && !valid.contains(&focus)
+                {
+                    self.focused_entry = None;
+                    self.detail_cache = None;
                 }
                 self.list_entries = entries;
                 self.load_error = None;
@@ -326,6 +325,56 @@ impl PhonoApp {
 impl Default for PhonoApp {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl eframe::App for PhonoApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        while let Ok(msg) = self.message_rx.try_recv() {
+            handle_message(self, msg, ctx);
+        }
+
+        // Single poll per frame: catches natural end-of-track, audio
+        // device disconnects, and explicit stops alike — if the handle
+        // has transitioned to Stopped we drop `current`, and the now-
+        // playing strip disappears on the next render pass. The drag
+        // buffer gets invalidated when the currently-playing id changes
+        // (or goes away), so a release into a stale id isn't sent.
+        let playing_before = self.player.as_ref().and_then(|p| p.currently_playing());
+        if let Some(player) = self.player.as_mut() {
+            player.poll_state();
+        }
+        let playing_after = self.player.as_ref().and_then(|p| p.currently_playing());
+        if playing_before != playing_after {
+            self.scrub_drag = None;
+        }
+
+        // Bottom panels stack outermost-first, so the status bar (mounted
+        // first) sits at the very bottom edge; the activity bar (when
+        // present) stacks above it.
+        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            widgets::status_bar::show(ui, self);
+        });
+
+        if !self.operations.is_empty() {
+            egui::TopBottomPanel::bottom("activity_bar").show(ctx, |ui| {
+                widgets::activity_bar::show(ui, &mut self.operations);
+            });
+        }
+
+        // The detail panel used to mount as a top-level `SidePanel::right`
+        // alongside the `CentralPanel`, but that made it span the full
+        // window height — including alongside the toolbar/filter bar,
+        // which looked awkward — and it was sized at the window level, so
+        // the CentralPanel's inner table never shrank narrow enough to
+        // actually trigger the horizontal scrollbar. The detail now
+        // nests inside the album-list view (see `views::album_list::show`),
+        // sharing width only with the table body.
+        egui::CentralPanel::default().show(ctx, |ui| {
+            views::album_list::show(ui, self);
+        });
+
+        views::settings::show(ctx, self);
     }
 }
 
@@ -422,55 +471,5 @@ mod tests {
             }),
         ];
         assert_eq!(app.unidentified_count(), 2);
-    }
-}
-
-impl eframe::App for PhonoApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        while let Ok(msg) = self.message_rx.try_recv() {
-            handle_message(self, msg, ctx);
-        }
-
-        // Single poll per frame: catches natural end-of-track, audio
-        // device disconnects, and explicit stops alike — if the handle
-        // has transitioned to Stopped we drop `current`, and the now-
-        // playing strip disappears on the next render pass. The drag
-        // buffer gets invalidated when the currently-playing id changes
-        // (or goes away), so a release into a stale id isn't sent.
-        let playing_before = self.player.as_ref().and_then(|p| p.currently_playing());
-        if let Some(player) = self.player.as_mut() {
-            player.poll_state();
-        }
-        let playing_after = self.player.as_ref().and_then(|p| p.currently_playing());
-        if playing_before != playing_after {
-            self.scrub_drag = None;
-        }
-
-        // Bottom panels stack outermost-first, so the status bar (mounted
-        // first) sits at the very bottom edge; the activity bar (when
-        // present) stacks above it.
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
-            widgets::status_bar::show(ui, self);
-        });
-
-        if !self.operations.is_empty() {
-            egui::TopBottomPanel::bottom("activity_bar").show(ctx, |ui| {
-                widgets::activity_bar::show(ui, &mut self.operations);
-            });
-        }
-
-        // The detail panel used to mount as a top-level `SidePanel::right`
-        // alongside the `CentralPanel`, but that made it span the full
-        // window height — including alongside the toolbar/filter bar,
-        // which looked awkward — and it was sized at the window level, so
-        // the CentralPanel's inner table never shrank narrow enough to
-        // actually trigger the horizontal scrollbar. The detail now
-        // nests inside the album-list view (see `views::album_list::show`),
-        // sharing width only with the table body.
-        egui::CentralPanel::default().show(ctx, |ui| {
-            views::album_list::show(ui, self);
-        });
-
-        views::settings::show(ctx, self);
     }
 }

@@ -71,9 +71,10 @@ impl IdentificationProvider for MusicBrainzProvider {
         let Some(discid) = ids.mb_discid.as_ref() else {
             return Ok(None);
         };
-        let url = format!(
+        let url = Url::parse(&format!(
             "https://musicbrainz.org/ws/2/discid/{discid}?inc=artists+recordings+release-groups&fmt=json"
-        );
+        ))
+        .map_err(|e| ProviderError::Other(format!("musicbrainz URL: {e}")))?;
         let resp = self.http.get(&url).map_err(map_http_err)?;
         match resp.status {
             200 => parse_discid_response(&resp.body),
@@ -233,7 +234,8 @@ impl AssetProvider for CoverArtArchiveProvider {
         let Some(mbid) = ctx.release.mbid.as_ref() else {
             return Ok(Vec::new());
         };
-        let url = format!("https://coverartarchive.org/release/{mbid}");
+        let url = Url::parse(&format!("https://coverartarchive.org/release/{mbid}"))
+            .map_err(|e| ProviderError::Other(format!("cover-art-archive URL: {e}")))?;
         let resp = self.http.get(&url).map_err(map_http_err)?;
         match resp.status {
             200 => parse_caa_response(&resp.body),

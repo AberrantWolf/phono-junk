@@ -113,7 +113,7 @@ impl IdentificationProvider for BarcodelookupProvider {
         let Some(url) = build_search_url(ids, key) else {
             return Ok(None);
         };
-        let resp = self.http()?.get(url.as_str()).map_err(map_http_err)?;
+        let resp = self.http()?.get(&url).map_err(map_http_err)?;
         match resp.status {
             200 => parse_search_response(&resp.body),
             401 | 403 => Err(ProviderError::Auth("barcodelookup key rejected".into())),
@@ -146,7 +146,7 @@ impl AssetProvider for BarcodelookupProvider {
         let Some(url) = build_search_url(ctx.ids, key) else {
             return Ok(Vec::new());
         };
-        let resp = self.http()?.get(url.as_str()).map_err(map_http_err)?;
+        let resp = self.http()?.get(&url).map_err(map_http_err)?;
         if resp.status != 200 {
             return Ok(Vec::new());
         }
@@ -240,7 +240,7 @@ pub fn parse_search_response(bytes: &[u8]) -> Result<Option<ProviderResult>, Pro
         album,
         release,
         tracks: Vec::new(),
-        cover_art_urls: p.images.iter().cloned().collect(),
+        cover_art_urls: p.images.to_vec(),
         provider: PROVIDER.to_string(),
         raw_response,
     }))

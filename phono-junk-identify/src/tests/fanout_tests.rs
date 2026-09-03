@@ -10,6 +10,7 @@ use governor::clock::{Clock, FakeRelativeClock};
 use httpmock::prelude::*;
 use nonzero_ext::nonzero;
 use phono_junk_core::{DiscIds, Toc};
+use url::Url;
 
 use crate::{
     Credentials, DiscIdKind, HttpClient, IdentificationProvider, ProviderError, ProviderResult,
@@ -19,7 +20,7 @@ use crate::{
 struct HttpProbe {
     name: &'static str,
     http: HttpClient,
-    url: String,
+    url: Url,
 }
 
 impl IdentificationProvider for HttpProbe {
@@ -66,7 +67,7 @@ fn shared_host_bucket_serializes_requests_across_cloned_clients() {
         .build()
         .unwrap();
 
-    let url = server.url("/probe");
+    let url = Url::parse(&server.url("/probe")).unwrap();
     let providers: Vec<Box<dyn IdentificationProvider>> = vec![
         Box::new(HttpProbe {
             name: "p1",

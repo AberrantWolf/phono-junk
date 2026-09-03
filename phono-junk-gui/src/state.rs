@@ -200,20 +200,20 @@ pub fn handle_message(app: &mut PhonoApp, msg: AppMessage, ctx: &egui::Context) 
         AppMessage::DetailArtLoaded { key, bytes } => {
             // Drop stale loads — the user may have clicked another row
             // mid-fetch. Only writeback if the still-focused entry matches.
-            if let Some(cache) = app.detail_cache.as_mut() {
-                if cache.key == key {
-                    cache.art_bytes = Some(bytes);
-                    cache.art_loading = false;
-                    cache.art_error = None;
-                }
+            if let Some(cache) = app.detail_cache.as_mut()
+                && cache.key == key
+            {
+                cache.art_bytes = Some(bytes);
+                cache.art_loading = false;
+                cache.art_error = None;
             }
         }
         AppMessage::DetailArtFailed { key, error } => {
-            if let Some(cache) = app.detail_cache.as_mut() {
-                if cache.key == key {
-                    cache.art_loading = false;
-                    cache.art_error = Some(error);
-                }
+            if let Some(cache) = app.detail_cache.as_mut()
+                && cache.key == key
+            {
+                cache.art_loading = false;
+                cache.art_error = Some(error);
             }
         }
     }

@@ -97,10 +97,8 @@ impl PhonoContext {
         force_refresh: bool,
     ) -> Result<IdentifiedDisc, IdentifyError> {
         // Step 1: cache lookup.
-        if !force_refresh {
-            if let Some(disc) = find_disc_by_ids(conn, ids)? {
-                return Ok(cached_outcome(conn, disc, rip_file_id)?);
-            }
+        if !force_refresh && let Some(disc) = find_disc_by_ids(conn, ids)? {
+            return cached_outcome(conn, disc, rip_file_id);
         }
 
         // Step 2+3: fan-out + merge.
@@ -228,19 +226,18 @@ impl PhonoContext {
 /// means — the UNIQUE index on `(ar_discid1, ar_discid2, cddb_id)` is
 /// global, so this lookup must be global too.
 fn find_disc_by_ids(conn: &Connection, ids: &DiscIds) -> Result<Option<Disc>, DbError> {
-    if let Some(mb) = ids.mb_discid.as_deref() {
-        if let Some(disc) = crud::find_disc_by_mb_discid(conn, mb)? {
-            return Ok(Some(disc));
-        }
+    if let Some(mb) = ids.mb_discid.as_deref()
+        && let Some(disc) = crud::find_disc_by_mb_discid(conn, mb)?
+    {
+        return Ok(Some(disc));
     }
     if let (Some(a1), Some(a2), Some(cddb)) = (
         ids.ar_discid1.as_deref(),
         ids.ar_discid2.as_deref(),
         ids.cddb_id.as_deref(),
-    ) {
-        if let Some(disc) = crud::find_disc_by_ar_triple(conn, a1, a2, cddb)? {
-            return Ok(Some(disc));
-        }
+    ) && let Some(disc) = crud::find_disc_by_ar_triple(conn, a1, a2, cddb)?
+    {
+        return Ok(Some(disc));
     }
     Ok(None)
 }
@@ -273,10 +270,10 @@ fn cached_outcome(
 // ---------------------------------------------------------------------------
 
 fn upsert_album(conn: &Connection, meta: &phono_junk_identify::AlbumMeta) -> Result<Id, DbError> {
-    if let Some(mbid) = meta.mbid.as_deref() {
-        if let Some(existing) = find_album_by_mbid(conn, mbid)? {
-            return Ok(existing.id);
-        }
+    if let Some(mbid) = meta.mbid.as_deref()
+        && let Some(existing) = find_album_by_mbid(conn, mbid)?
+    {
+        return Ok(existing.id);
     }
     let album = Album {
         id: 0,
@@ -389,16 +386,16 @@ fn delete_release_if_orphan(conn: &Connection, release_id: Id) -> Result<(), DbE
         crud::delete_override(conn, o.id)?;
     }
     crud::delete_release(conn, release_id)?;
-    if let Some(r) = release {
-        if crud::list_releases_for_album(conn, r.album_id)?.is_empty() {
-            for d in crud::list_disagreements_for(conn, "Album", r.album_id)? {
-                crud::delete_disagreement(conn, d.id)?;
-            }
-            for o in crud::list_overrides_for(conn, "Album", r.album_id)? {
-                crud::delete_override(conn, o.id)?;
-            }
-            crud::delete_album(conn, r.album_id)?;
+    if let Some(r) = release
+        && crud::list_releases_for_album(conn, r.album_id)?.is_empty()
+    {
+        for d in crud::list_disagreements_for(conn, "Album", r.album_id)? {
+            crud::delete_disagreement(conn, d.id)?;
         }
+        for o in crud::list_overrides_for(conn, "Album", r.album_id)? {
+            crud::delete_override(conn, o.id)?;
+        }
+        crud::delete_album(conn, r.album_id)?;
     }
     Ok(())
 }

@@ -5,8 +5,9 @@
 //! [`HttpClientBuilder::user_agent`] — MusicBrainz returns 403 without one,
 //! and a silent default would surface as a confusing network error.
 //!
-//! Retries, redaction, and backoff policy live in caller crates, not here.
-//! This layer is transport + rate-limit only.
+//! URL redaction is deliberately centralized here: callers may put API keys
+//! in query parameters, while transport errors can otherwise echo the full
+//! request URL. Retries and backoff policy remain caller concerns.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -115,8 +116,8 @@ impl HttpClient {
 
     /// Issue a rate-limited GET. Waits on the per-host bucket (if registered)
     /// before sending. Injects the configured `User-Agent` header.
-    pub fn get(&self, url_str: &str) -> Result<HttpResponse, HttpError> {
-        self.get_with_headers(url_str, &[])
+    pub fn get(&self, url: &Url) -> Result<HttpResponse, HttpError> {
+        self.get_with_headers(url, &[])
     }
 
     /// GET with additional request headers (e.g. `Authorization`). The
@@ -126,15 +127,14 @@ impl HttpClient {
     /// them before passing in.
     pub fn get_with_headers(
         &self,
-        url_str: &str,
+        url: &Url,
         headers: &[(reqwest::header::HeaderName, reqwest::header::HeaderValue)],
     ) -> Result<HttpResponse, HttpError> {
-        let url =
-            Url::parse(url_str).map_err(|e| HttpError::InvalidUrl(format!("{url_str}: {e}")))?;
         let host = url
             .host_str()
-            .ok_or_else(|| HttpError::InvalidUrl(format!("{url_str}: no host")))?
+            .ok_or_else(|| HttpError::InvalidUrl("URL has no host".into()))?
             .to_ascii_lowercase();
+        let safe_url = redacted_url(url);
 
         if let Some(bucket) = self.per_host.get(&host) {
             loop {
@@ -148,28 +148,28 @@ impl HttpClient {
             }
         }
 
-        log::debug!("HTTP GET {url_str}");
+        log::debug!("HTTP GET {safe_url}");
         let mut builder = self
             .http
-            .get(url_str)
+            .get(url.clone())
             .header(reqwest::header::USER_AGENT, &self.user_agent);
         for (name, value) in headers {
             builder = builder.header(name.clone(), value.clone());
         }
         let resp = builder.send().map_err(|e| {
             let err = map_reqwest_err(e);
-            log::warn!("HTTP GET {url_str} failed: {err}");
+            log::warn!("HTTP GET {safe_url} failed: {err}");
             err
         })?;
 
         let status = resp.status();
-        log::debug!("HTTP GET {url_str} → {}", status.as_u16());
+        log::debug!("HTTP GET {safe_url} → {}", status.as_u16());
         if status.as_u16() == 429 {
-            log::warn!("HTTP 429 rate-limited by {host} ({url_str})");
+            log::warn!("HTTP 429 rate-limited by {host} ({safe_url})");
             return Err(HttpError::ServerRateLimited);
         }
         if !status.is_success() && status.as_u16() != 404 {
-            log::warn!("HTTP {} from {url_str}", status.as_u16());
+            log::warn!("HTTP {} from {safe_url}", status.as_u16());
         }
 
         let content_type = resp
@@ -191,8 +191,41 @@ fn map_reqwest_err(e: reqwest::Error) -> HttpError {
     if e.is_timeout() {
         HttpError::Timeout
     } else {
-        HttpError::Transport(e.to_string())
+        HttpError::Transport(e.without_url().to_string())
     }
+}
+
+const REDACTED_QUERY_VALUE: &str = "[REDACTED]";
+const SENSITIVE_QUERY_KEYS: &[&str] = &["key", "token", "access_token", "api_key"];
+
+/// Return a log-safe copy of a request URL.
+///
+/// Provider credentials occasionally have to travel in a query parameter.
+/// Keeping the scrubber in the shared transport makes the safe behavior the
+/// default for every current and future provider.
+pub fn redacted_url(url: &Url) -> Url {
+    let Some(_) = url.query() else {
+        return url.clone();
+    };
+
+    let pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .map(|(key, value)| {
+            let value = if SENSITIVE_QUERY_KEYS
+                .iter()
+                .any(|candidate| key.eq_ignore_ascii_case(candidate))
+            {
+                REDACTED_QUERY_VALUE.into()
+            } else {
+                value.into_owned()
+            };
+            (key.into_owned(), value)
+        })
+        .collect();
+
+    let mut safe = url.clone();
+    safe.query_pairs_mut().clear().extend_pairs(pairs);
+    safe
 }
 
 /// Builder for [`HttpClient`]. The `user_agent` is mandatory; `build` returns
@@ -210,7 +243,7 @@ impl HttpClientBuilder {
             user_agent: None,
             per_host: HashMap::new(),
             timeout: DEFAULT_TIMEOUT,
-            sleep_fn: Arc::new(|d| std::thread::sleep(d)),
+            sleep_fn: Arc::new(std::thread::sleep),
         }
     }
 
@@ -265,7 +298,7 @@ impl HttpClientBuilder {
         let http = reqwest::blocking::Client::builder()
             .timeout(self.timeout)
             .build()
-            .map_err(|e| HttpError::Transport(e.to_string()))?;
+            .map_err(|e| HttpError::Transport(e.without_url().to_string()))?;
         Ok(HttpClient {
             http,
             user_agent: ua,

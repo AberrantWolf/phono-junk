@@ -105,13 +105,12 @@ pub fn show(ui: &mut Ui, app: &mut PhonoApp) {
 
 fn toolbar(ui: &mut Ui, app: &mut PhonoApp) {
     ui.horizontal(|ui| {
-        if ui.button("Open Database...").clicked() {
-            if let Some(path) = rfd::FileDialog::new()
+        if ui.button("Open Database...").clicked()
+            && let Some(path) = rfd::FileDialog::new()
                 .add_filter("SQLite", &["db", "sqlite", "sqlite3"])
                 .pick_file()
-            {
-                open_db(app, path);
-            }
+        {
+            open_db(app, path);
         }
 
         let has_db = app.db_conn.is_some();
@@ -129,10 +128,9 @@ fn toolbar(ui: &mut Ui, app: &mut PhonoApp) {
                  auto-rescans it on every open.",
             )
             .clicked()
+            && let Some(root) = rfd::FileDialog::new().pick_folder()
         {
-            if let Some(root) = rfd::FileDialog::new().pick_folder() {
-                backend::scan::spawn_scan(app, root);
-            }
+            backend::scan::spawn_scan(app, root);
         }
 
         let toggle_label = if app.detail_open {
@@ -222,10 +220,9 @@ fn toolbar(ui: &mut Ui, app: &mut PhonoApp) {
                 egui::Button::new(format!("Export ({n_alb})...")),
             )
             .clicked()
+            && let Some(root) = rfd::FileDialog::new().pick_folder()
         {
-            if let Some(root) = rfd::FileDialog::new().pick_folder() {
-                backend::export::spawn_export(app, album_ids.clone(), root);
-            }
+            backend::export::spawn_export(app, album_ids.clone(), root);
         }
     });
     // db path / unidentified count / load error / status message render
@@ -638,23 +635,22 @@ fn apply_click(
     shift: bool,
     command: bool,
 ) {
-    if shift {
-        if let Some(anchor) = app.selection_anchor {
-            if let Some(anchor_idx) = entries.iter().position(|e| entry_key(e) == anchor) {
-                let (lo, hi) = if anchor_idx <= idx {
-                    (anchor_idx, idx)
-                } else {
-                    (idx, anchor_idx)
-                };
-                app.selected.clear();
-                for e in &entries[lo..=hi] {
-                    app.selected.insert(entry_key(e));
-                }
-                return;
-            }
+    if shift
+        && let Some(anchor) = app.selection_anchor
+        && let Some(anchor_idx) = entries.iter().position(|e| entry_key(e) == anchor)
+    {
+        let (lo, hi) = if anchor_idx <= idx {
+            (anchor_idx, idx)
+        } else {
+            (idx, anchor_idx)
+        };
+        app.selected.clear();
+        for e in &entries[lo..=hi] {
+            app.selected.insert(entry_key(e));
         }
-        // No usable anchor — fall through to single-select semantics.
+        return;
     }
+    // No usable anchor — fall through to single-select semantics.
     if command {
         if !app.selected.insert(key) {
             app.selected.remove(&key);

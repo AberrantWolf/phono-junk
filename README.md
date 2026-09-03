@@ -6,21 +6,25 @@ Sibling of [retro-junk](https://github.com/AberrantWolf/retro-junk); shares disc
 
 ## What it does
 
-- **Identify** CD rips (CUE/BIN, CHD) by computing canonical disc IDs from the TOC and querying multiple databases in parallel — MusicBrainz, Discogs, and additional providers as pluggable trait impls.
+- **Identify** CD rips (CUE/BIN, CHD) by computing canonical disc IDs from the TOC and querying pluggable metadata providers.
 - **Verify** rip quality against AccurateRip (and CUETools DB, eventually). Per-track confidence scores expose whether the rip is bit-identical to other submitters'.
 - **Catalog** everything in SQLite with user-editable YAML overrides. Disagreements between providers are recorded, not silently resolved.
 - **Export** selected discs as per-track FLAC with embedded Vorbis tags and cover art, organized into a standard music-library tree (`<AlbumArtist>/<Album> (<Year>)/NN - Title.flac`).
-- **Scrape album art** from Cover Art Archive, Discogs, iTunes Search API, and Amazon (ASIN-direct or PA-API).
+- **Find album art** through Cover Art Archive, Discogs, iTunes Search, Tower Records MDB, and BarcodeLookup where configured.
 
 CLI and GUI stay in feature sync. GUI ships with a pan-script font bundle (NotoSans + NotoSansCJK + NotoSansThai + NotoSansArabic + NotoSansDevanagari) loaded unconditionally — foreign scripts are the whole point.
 
 ## Status
 
-**Early development.** Workspace skeleton compiles; algorithms and providers are scaffolded with traits in place and most implementations pending.
+**Alpha.** The core workflows are implemented and tested, but the catalog,
+background-job, verification, and provider-resolution foundations are being
+hardened before more product features land. Schema v7 intentionally rebuilds
+older alpha catalogs.
 
-- [CLAUDE.md](CLAUDE.md) — architecture, dependency graph, conventions
-- [TODO.md](TODO.md) — ordered work queue for the MVP, deferred items, and open questions
-- [`.claude/skills/phono-archive/`](.claude/skills/phono-archive/) — disc-identification and verification algorithm references with upstream citations
+- [ARCHITECTURE.md](ARCHITECTURE.md) — boundaries and invariants
+- [TODO.md](TODO.md) — current Now/Next/Later queue
+- [`docs/knowledge/`](docs/knowledge/) — source-cited format and provider notes
+- [`docs/archive/development-history.md`](docs/archive/development-history.md) — historical sprint diary
 
 ## Build
 
@@ -30,7 +34,7 @@ cargo test
 cargo run -p phono-junk-cli -- --help
 ```
 
-On first build, Cargo fetches [junk-libs](https://github.com/AberrantWolf/junk-libs) over git. For faster iteration when you're also developing junk-libs, clone both repos side-by-side and uncomment the `[patch]` section at the bottom of the root `Cargo.toml`.
+On first build, Cargo fetches the exact pinned [junk-libs](https://github.com/AberrantWolf/junk-libs) revision over git. A clean checkout does not require a sibling repository.
 
 ## CLI usage
 
@@ -61,9 +65,14 @@ Global flags (valid on every subcommand):
 
 ## Architecture
 
-See [CLAUDE.md](CLAUDE.md) for the full workspace architecture, dependency graph, crate responsibilities, and development conventions.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the current dependency graph,
+crate responsibilities, and invariants. `CLAUDE.md` and `AGENTS.md` contain
+tooling instructions rather than project status.
 
-Short version: 14 crates organized into analysis foundation (`core`, `toc`, `accuraterip`), pluggable providers (`identify` + `musicbrainz`, `discogs`, `itunes`, `amazon`), catalog (`catalog`, `db`), cross-cutting (`extract`, `lib`), and presentation (`cli`, `gui`).
+Short version: the workspace separates analysis (`core`, `toc`,
+`accuraterip`), provider-neutral identification plus provider crates, durable
+catalog state (`catalog`, `db`), application use cases (`lib`, `extract`), and
+presentation (`cli`, `gui`).
 
 ## Sibling projects
 

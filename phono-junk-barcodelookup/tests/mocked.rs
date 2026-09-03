@@ -10,6 +10,7 @@ use httpmock::prelude::*;
 use phono_junk_barcodelookup::BarcodelookupProvider;
 use phono_junk_core::{DiscIds, Toc};
 use phono_junk_identify::{Credentials, HttpClient, IdentificationProvider, ProviderError};
+use url::Url;
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/search_barcode_hit.json");
 
@@ -52,7 +53,10 @@ fn round_trips_barcode_hit_through_client_and_parser() {
     });
 
     let client = test_client();
-    let url = server.url("/v3/products?barcode=0123456789012&formatted=y&key=integration-secret");
+    let url = Url::parse(
+        &server.url("/v3/products?barcode=0123456789012&formatted=y&key=integration-secret"),
+    )
+    .unwrap();
     let resp = client.get(&url).unwrap();
     assert_eq!(resp.status, 200);
 
@@ -93,9 +97,8 @@ fn server_401_maps_to_status_ready_for_auth_mapping() {
     });
 
     let client = test_client();
-    let resp = client
-        .get(&server.url("/v3/products?barcode=x&key=bad"))
-        .unwrap();
+    let url = Url::parse(&server.url("/v3/products?barcode=x&key=bad")).unwrap();
+    let resp = client.get(&url).unwrap();
     assert_eq!(resp.status, 401);
     // The provider maps this to ProviderError::Auth — covered by the
     // match arm in lib.rs. Direct status-code assertion here documents
@@ -114,9 +117,8 @@ fn server_404_returns_not_found_status_for_ok_none_mapping() {
     });
 
     let client = test_client();
-    let resp = client
-        .get(&server.url("/v3/products?barcode=x&key=ok"))
-        .unwrap();
+    let url = Url::parse(&server.url("/v3/products?barcode=x&key=ok")).unwrap();
+    let resp = client.get(&url).unwrap();
     assert_eq!(resp.status, 404);
 }
 

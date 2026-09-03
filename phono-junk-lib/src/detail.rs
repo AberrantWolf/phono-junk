@@ -3,6 +3,7 @@
 //! Composes the disc-tree CRUD chain (`get_album` → `list_releases_for_album`
 //! → `list_discs_for_release` → `list_tracks_for_disc` + `list_assets_for_release`
 //! + `list_disagreements_for` + `find_rip_file_for_disc`) into a single
+//!
 //! call so the panel reads from a typed `AlbumDetail` value rather than
 //! reissuing the same join shape inline.
 //!
@@ -163,10 +164,10 @@ pub fn load_unidentified_detail(rip_file: RipFile) -> UnidentifiedDetail {
 
 fn read_toc_for(rip_file: &RipFile) -> Result<Option<Toc>, String> {
     if let Some(cue) = rip_file.cue_path.as_ref() {
-        return read_toc_or_msg(cue, |p| read_toc_from_cue(p)).map(Some);
+        return read_toc_or_msg(cue, read_toc_from_cue).map(Some);
     }
     if let Some(chd) = rip_file.chd_path.as_ref() {
-        return read_toc_or_msg(chd, |p| read_toc_from_chd(p)).map(Some);
+        return read_toc_or_msg(chd, read_toc_from_chd).map(Some);
     }
     Ok(None)
 }

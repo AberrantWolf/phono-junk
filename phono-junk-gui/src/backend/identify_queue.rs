@@ -151,7 +151,7 @@ fn start_queue(
                 s.as_ref()
                     .and_then(|s| s.active_op.as_ref().map(|(_, c)| c.clone()))
             };
-            if cancel.as_ref().map_or(false, |c| c.load(Ordering::Relaxed)) {
+            if cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
                 finish_item(&state_for_worker, &ui_tx_for_worker, item.rip_file_id);
                 continue;
             }
@@ -209,9 +209,7 @@ fn finish_item(state: &Arc<Mutex<QueueState>>, ui_tx: &Sender<AppMessage>, rf_id
         });
     }
     let _ = ui_tx.send(AppMessage::LibraryChanged);
-    if burst_done {
-        if let Some(op_id) = op_id_opt {
-            let _ = ui_tx.send(AppMessage::OperationComplete { op_id });
-        }
+    if burst_done && let Some(op_id) = op_id_opt {
+        let _ = ui_tx.send(AppMessage::OperationComplete { op_id });
     }
 }

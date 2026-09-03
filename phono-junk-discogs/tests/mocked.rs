@@ -7,6 +7,7 @@ use httpmock::prelude::*;
 use phono_junk_core::{DiscIds, Toc};
 use phono_junk_discogs::DiscogsProvider;
 use phono_junk_identify::{Credentials, HttpClient, IdentificationProvider, ProviderError};
+use url::Url;
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/search_barcode_hit.json");
 
@@ -26,7 +27,7 @@ fn ids_with_barcode(bc: &str) -> DiscIds {
     }
 }
 
-fn client_pointing_at(server: &MockServer) -> HttpClient {
+fn client_pointing_at() -> HttpClient {
     // Retarget api.discogs.com to the mock server. We do this by building
     // the client without the Discogs host quota — the provider still
     // sends its request to a full URL we pass in via the query pairs.
@@ -62,8 +63,9 @@ fn provider_sends_authorization_header_and_round_trips_hit() {
     // pair IS the public surface Discogs uses, and this test asserts the
     // exact header wire shape + parse-round-trip path.
     use phono_junk_identify::header::{AUTHORIZATION, HeaderName, HeaderValue};
-    let client = client_pointing_at(&server);
-    let url = server.url("/database/search?type=release&barcode=0123456789012");
+    let client = client_pointing_at();
+    let url =
+        Url::parse(&server.url("/database/search?type=release&barcode=0123456789012")).unwrap();
     let headers = [(
         HeaderName::from_static("authorization"),
         HeaderValue::from_static("Discogs token=integration-secret"),
@@ -107,14 +109,10 @@ fn provider_maps_401_to_auth_error() {
 
     // Simulate the provider's 401 handler by hand using the raw client.
     use phono_junk_identify::header::{AUTHORIZATION, HeaderValue};
-    let client = client_pointing_at(&server);
+    let client = client_pointing_at();
     let headers = [(AUTHORIZATION, HeaderValue::from_static("Discogs token=bad"))];
-    let resp = client
-        .get_with_headers(
-            &server.url("/database/search?type=release&barcode=x"),
-            &headers,
-        )
-        .unwrap();
+    let url = Url::parse(&server.url("/database/search?type=release&barcode=x")).unwrap();
+    let resp = client.get_with_headers(&url, &headers).unwrap();
     assert_eq!(resp.status, 401);
 
     // Proven: status code is 401 → provider maps to Auth (see provider

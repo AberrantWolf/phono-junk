@@ -648,12 +648,11 @@ fn now_playing_strip(ui: &mut Ui, app: &mut PhonoApp) {
         if slider_resp.drag_started() {
             app.scrub_drag = Some((id, slider_value));
         }
-        if slider_resp.dragged() {
-            if let Some(d) = app.scrub_drag.as_mut() {
-                if d.0 == id {
-                    d.1 = slider_value;
-                }
-            }
+        if slider_resp.dragged()
+            && let Some(d) = app.scrub_drag.as_mut()
+            && d.0 == id
+        {
+            d.1 = slider_value;
         }
         if slider_resp.drag_stopped() {
             if let Some(p) = app.player.as_mut() {
@@ -708,10 +707,10 @@ fn action_footer(ui: &mut Ui, app: &mut PhonoApp, detail: &AlbumDetail) {
         if ui.button("Re-verify").clicked() {
             backend::verify::spawn_reverify(app, album_ids.clone());
         }
-        if ui.button("Export…").clicked() {
-            if let Some(root) = rfd::FileDialog::new().pick_folder() {
-                backend::export::spawn_export(app, album_ids, root);
-            }
+        if ui.button("Export…").clicked()
+            && let Some(root) = rfd::FileDialog::new().pick_folder()
+        {
+            backend::export::spawn_export(app, album_ids, root);
         }
     });
 }

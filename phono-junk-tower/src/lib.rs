@@ -99,11 +99,13 @@ impl TowerProvider {
     /// Fetch a URL, checking the cache first when one is configured.
     fn fetch(&self, url: &str, kind: CacheKind) -> Result<HttpResponse, ProviderError> {
         let client = self.http()?;
+        let parsed =
+            Url::parse(url).map_err(|e| ProviderError::Other(format!("tower URL: {e}")))?;
         match &self.cache {
             Some(c) => c
-                .get_or_fetch(url, kind, || client.get(url))
+                .get_or_fetch(url, kind, || client.get(&parsed))
                 .map_err(map_http_err),
-            None => client.get(url).map_err(map_http_err),
+            None => client.get(&parsed).map_err(map_http_err),
         }
     }
 

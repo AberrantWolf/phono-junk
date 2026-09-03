@@ -60,7 +60,7 @@ impl AccurateRipClient {
     /// exposed so tests can drive the response-branch logic against a
     /// mock HTTP server (the real fetch_dbar always hits
     /// `www.accuraterip.com`).
-    pub fn fetch_at_url(&self, url: &str) -> Result<Option<DbarFile>, AccurateRipError> {
+    pub fn fetch_at_url(&self, url: &url::Url) -> Result<Option<DbarFile>, AccurateRipError> {
         let resp = self.http.get(url)?;
         match resp.status {
             200 => Ok(Some(DbarFile::parse(&resp.body)?)),

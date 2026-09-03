@@ -24,10 +24,10 @@ fn fixtures_dir() -> PathBuf {
 /// Create `path` as a sparse file of exactly `len` bytes if it doesn't
 /// already exist at that size. Subsequent calls are no-ops.
 fn ensure_sparse_file(path: &Path, len: u64) -> io::Result<()> {
-    if let Ok(meta) = std::fs::metadata(path) {
-        if meta.len() == len {
-            return Ok(());
-        }
+    if let Ok(meta) = std::fs::metadata(path)
+        && meta.len() == len
+    {
+        return Ok(());
     }
     let file: File = OpenOptions::new()
         .create(true)

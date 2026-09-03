@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 phono-junk-core.workspace = true
 phono-junk-identify.workspace = true
+url.workspace = true
 junk-libs-core.workspace = true
 junk-libs-disc.workspace = true
 thiserror.workspace = true

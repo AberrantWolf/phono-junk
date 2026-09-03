@@ -298,8 +298,9 @@ pub fn filter_entries(entries: Vec<ListEntry>, f: &ListFilters) -> Vec<ListEntry
 /// Column the user is sorting the album list by. GUI-only concept for
 /// now — the CLI keeps its fixed album-id order (see TODO.md for the
 /// planned `--sort` flag follow-up).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SortKey {
+    #[default]
     Title,
     Artist,
     Year,
@@ -310,22 +311,11 @@ pub enum SortKey {
     Releases,
 }
 
-impl Default for SortKey {
-    fn default() -> Self {
-        Self::Title
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SortDir {
+    #[default]
     Asc,
     Desc,
-}
-
-impl Default for SortDir {
-    fn default() -> Self {
-        Self::Asc
-    }
 }
 
 /// Sort entries by the chosen key/direction.
