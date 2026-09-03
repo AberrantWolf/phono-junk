@@ -2844,6 +2844,7 @@ dependencies = [
 [[package]]
 name = "junk-libs-core"
 version = "0.1.0"
+source = "git+https://github.com/AberrantWolf/junk-libs?rev=0c8ac1a1ea3902f20a0e06ba2c922d2dc2b1774d#0c8ac1a1ea3902f20a0e06ba2c922d2dc2b1774d"
 dependencies = [
  "crc32fast",
  "md5",
@@ -2855,6 +2856,7 @@ dependencies = [
 [[package]]
 name = "junk-libs-disc"
 version = "0.1.0"
+source = "git+https://github.com/AberrantWolf/junk-libs?rev=0c8ac1a1ea3902f20a0e06ba2c922d2dc2b1774d#0c8ac1a1ea3902f20a0e06ba2c922d2dc2b1774d"
 dependencies = [
  "chd",
  "crc32fast",

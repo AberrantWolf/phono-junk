@@ -25,11 +25,9 @@ edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
-# Sibling junk-libs (https://github.com/AberrantWolf/junk-libs).
-# For faster local iteration with a sibling clone, uncomment the [patch]
-# section at the bottom of this file.
-junk-libs-core = { git = "https://github.com/AberrantWolf/junk-libs" }
-junk-libs-disc = { git = "https://github.com/AberrantWolf/junk-libs" }
+# Shared disc implementation, pinned so clean builds are reproducible.
+junk-libs-core = { git = "https://github.com/AberrantWolf/junk-libs", rev = "0c8ac1a1ea3902f20a0e06ba2c922d2dc2b1774d" }
+junk-libs-disc = { git = "https://github.com/AberrantWolf/junk-libs", rev = "0c8ac1a1ea3902f20a0e06ba2c922d2dc2b1774d" }
 
 # Internal crates
 phono-junk-core = { path = "phono-junk-core" }
@@ -93,14 +91,3 @@ predicates = "3"
 [profile.dist]
 inherits = "release"
 lto = "thin"
-
-# ---- Local development override (opt-in) ----
-# Uncomment these four lines when you have a sibling clone of junk-libs at
-# ../junk-libs/ and want Cargo to use the local path instead of fetching
-# from GitHub. Faster iteration; no push-before-test cycle. Cargo errors
-# if the path doesn't exist, so leave commented if you haven't cloned the
-# sibling repo.
-#
-[patch."https://github.com/AberrantWolf/junk-libs"]
-junk-libs-core = { path = "../junk-libs/junk-libs-core" }
-junk-libs-disc = { path = "../junk-libs/junk-libs-disc" }
