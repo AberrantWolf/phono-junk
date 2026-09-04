@@ -57,5 +57,33 @@ on a product. phono-junk and retro-junk never depend on each other.
 Schema v7 is the first migration-supported baseline. It separates replaceable
 catalog projections from provider observations, verification runs, and user
 authority. Stable string keys—not transient SQLite row IDs—target overrides
-and disagreements. See [TODO.md](TODO.md) for the active implementation queue
-and [docs/knowledge](docs/knowledge) for cited external format/provider facts.
+and disagreements. Projection refreshes are upserts, so track and asset IDs,
+cached artwork, and user authority survive re-identification.
+
+Identification executes a bounded frontier: exact MusicBrainz DiscID,
+music-specific identifier lookups, tied-result fallbacks, generic barcode
+fallback, then artwork for the selected release. Each provider/identifier pair
+is queried once per attempt. Every returned candidate and raw observation is
+stored before deterministic scoring updates the catalog projection.
+
+AccurateRip dBAR primary checksums are version-neutral evidence. Local ARv2 and
+ARv1 values are compared independently; the frame-450 checksum can support an
+offset but can never verify a track. Offset ties remain explicitly ambiguous.
+Compact status strings shown by the clients are derived from the latest
+structured verification run.
+
+## DRY and operational practices
+
+- CUE/CHD layout and PCM stay in `junk-libs-disc`; checksum meaning stays in
+  `phono-junk-accuraterip`.
+- One candidate model, one projection mapper, and one album aggregate serve
+  identification, CLI, GUI, and export.
+- One shared HTTP client enforces provider-owned host policies and redacts
+  credentials from diagnostics.
+- Database resets are explicit, jobs are bounded and joined, and network I/O
+  never runs while a catalog transaction is open.
+- External format claims and opt-in oracles live in
+  [docs/knowledge](docs/knowledge), with upstream citations.
+
+See [TODO.md](TODO.md) for the active queue and
+[docs/knowledge](docs/knowledge) for cited external format/provider facts.

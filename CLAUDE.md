@@ -27,7 +27,7 @@ The sibling `junk-libs` workspace lives at `../junk-libs/` and is consumed via p
 **Workspace crates:**
 
 *Analysis foundation:*
-- `phono-junk-core` — bottom-level types (`Toc`, `DiscIds`, `AlbumIdentification`, `AudioError`, `IdentificationConfidence`, `IdentificationSource`). Re-exports `junk_libs_core::ReadSeek` for convenience. No I/O.
+- `phono-junk-core` — bottom-level types (`Toc`, `DiscIds`, `AudioError`, `IdentificationConfidence`, `IdentificationSource`). Re-exports `junk_libs_core::ReadSeek` for convenience. No I/O.
 - `phono-junk-toc` — TOC extraction from CUE/CHD and **single canonical implementation** of every disc-ID algorithm (MusicBrainz DiscID, FreeDB/CDDB ID, AccurateRip id1/id2). All providers consume its output via `DiscIds`.
 - `phono-junk-accuraterip` — AccurateRip CRC v1/v2 computation and dBAR database lookup. Verification, not identification.
 
@@ -36,7 +36,6 @@ The sibling `junk-libs` workspace lives at `../junk-libs/` and is consumed via p
 - `phono-junk-musicbrainz` — MusicBrainz Web Service v2 provider + Cover Art Archive asset provider. Unauthenticated. 1 req/sec.
 - `phono-junk-discogs` — Discogs API provider (barcode/catalog-number keyed) + Discogs image asset provider. Requires user token.
 - `phono-junk-itunes` — iTunes Search API asset-only provider (album art; URL-rewrite to hi-res). Unauthenticated.
-- `phono-junk-amazon` — Amazon image asset provider. ASIN-direct fetch unauthenticated; PA-API search with affiliate credentials.
 
 *Catalog foundation:*
 - `phono-junk-catalog` — data model: `Album`, `Release`, `Disc`, `Track`, `RipFile`, `Asset`, `Disagreement`, `Override`. YAML I/O for seed data and overrides; no DB.
@@ -93,8 +92,7 @@ Notes:
 **Key types:**
 - `Toc` and `DiscIds` (in `phono-junk-core`) — every identification hinges on these.
 - `IdentificationProvider` trait (in `phono-junk-identify`) — central abstraction for new databases; parallel of retro-junk's `RomAnalyzer`. Adding a new music DB = one new crate, one trait impl, zero changes elsewhere.
-- `AssetProvider` trait (in `phono-junk-identify`) — parallel trait for album art sources (Cover Art Archive, iTunes, Amazon, future Bandcamp / Last.fm / fanart.tv).
-- `AlbumIdentification` — builder-style output; analog of `RomIdentification`.
+- `AssetProvider` trait (in `phono-junk-identify`) — parallel trait for album art sources (Cover Art Archive, iTunes, future Bandcamp / Last.fm / fanart.tv).
 - `PhonoContext` (in `phono-junk-lib`) — registry of all providers and credentials; single entry point for CLI and GUI.
 - `AudioError` — error enum using `thiserror`; wraps `junk_libs_core::AnalysisError` for disc-I/O errors.
 - `ReadSeek` — re-exported from `junk-libs-core`; trait alias for `Read + Seek`.
@@ -119,7 +117,6 @@ Provider crates own ALL database-specific knowledge. No provider-specific code e
 
 ## Conventions
 
-- **Builder pattern** on `AlbumIdentification`: chain `.with_title()`, `.with_artist()`, `.with_year()`, `.with_mbid()`, `.with_confidence()`, `.with_source()`.
 - **Provider-specific data** that doesn't fit the generic schema goes in a raw-response JSON field on `ProviderResult` for forensic inspection. Don't bloat the catalog with every provider's exotic fields — add a field only when two+ providers return it.
 - **`&'static str`** for all provider metadata methods (`name`, `asset_types`, `supported_ids`).
 - **`thiserror`** for errors. Providers return `ProviderError` from `phono-junk-identify`; it converts to `AudioError` via `From`. Library functions return `AudioError` or a crate-specific error type.

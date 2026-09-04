@@ -1,8 +1,19 @@
-# TODO
+# Development History
 
-Work queue for phono-junk, organized as an ordered sprint list. Each sprint is sized to fit comfortably in a single focused conversation; dependencies on prior sprints are called out explicitly. Add new items freely — this is a living list, not a spec.
+This is the archived alpha-era sprint diary. It is historical context, not the
+active work queue; see [`TODO.md`](../../TODO.md) for current priorities.
 
 ## Completed sprints
+
+- [x] **Critical foundation recovery — schema v7 and owned application boundary**
+  Released and pinned the shared `junk-libs-disc` parser/PCM work; established
+  reproducible toolchain, CI, secret-safe HTTP, and canonical cited knowledge;
+  replaced the disposable v6 catalog with a migration-supported v7 evidence
+  model; corrected dBAR primary/450 semantics and added unique offset search;
+  introduced `LibrarySession` with bounded joined jobs; replaced flat provider
+  fan-out with staged multi-candidate scoring; and routed CLI, GUI, and export
+  through one aggregate-backed facade. The empty Amazon placeholder and stale
+  duplicate identification model were removed.
 
 - [x] **Sprint 1 — DiscID algorithms** (`phono-junk-toc/src/discid.rs`, `phono-junk-toc/src/lib.rs`)
   MusicBrainz DiscID, FreeDB/CDDB ID, AccurateRip id1/id2 + `compute_disc_ids` wrapper. Fixtures: MB spec 6-track, libdiscid `test_put.c` 22-track, four ARver test fixtures. Corrected skill-doc error (CDDB seconds formula uses raw offset/75 with single-pass digit-sum, not LSN-based with iterative sum).

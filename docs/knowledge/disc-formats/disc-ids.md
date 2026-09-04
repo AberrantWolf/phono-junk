@@ -98,7 +98,7 @@ Both IDs are 32-bit unsigned integers. When embedded in the dBAR URL they are fo
 ### dBAR URL format
 
 ```
-http://www.accuraterip.com/accuraterip/<id1_last_char>/<id1_2nd_last>/<id1_3rd_last>/dBAR-<ntracks_padded>-<id1_hex>-<id2_hex>-<cddb_id_hex>.bin
+https://www.accuraterip.com/accuraterip/<id1_last_char>/<id1_2nd_last>/<id1_3rd_last>/dBAR-<ntracks_padded>-<id1_hex>-<id2_hex>-<cddb_id_hex>.bin
 ```
 
 - `<id1_last_char>`, `<id1_2nd_last>`, `<id1_3rd_last>` are the last three characters of the 8-char hex string of `id1`, used in reverse order as the directory path.
@@ -107,7 +107,7 @@ http://www.accuraterip.com/accuraterip/<id1_last_char>/<id1_2nd_last>/<id1_3rd_l
 
 Example for a 12-track disc with `id1 = 0x001b0c2a`, `id2 = 0x02e8a1b7`, `cddb_id = 0xa40c4b0c`:
 ```
-http://www.accuraterip.com/accuraterip/a/2/c/dBAR-012-001b0c2a-02e8a1b7-a40c4b0c.bin
+https://www.accuraterip.com/accuraterip/a/2/c/dBAR-012-001b0c2a-02e8a1b7-a40c4b0c.bin
 ```
 
 ## Implementation notes (for `phono-junk-toc`)

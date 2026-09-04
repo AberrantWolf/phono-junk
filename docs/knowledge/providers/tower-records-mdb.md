@@ -188,21 +188,23 @@ After `<div class="info-label ...">リリース概要</div>` — free-form Japan
 
 After `<div class="info-label ...">バージョンリスト</div>` — rows of title / format / label / catalog # / country / year, each linking to another `/release/{id}`. This is the **killer feature** for our fallback use case: a hit on a JP-only pressing by catalog number exposes the sibling international pressing with the barcode that Discogs/MB will recognize. Worth storing the version-list release IDs on the catalog entry for later enrichment.
 
-## Mapping to `AlbumIdentification`
+## Mapping to provider evidence
 
-| Tower MDB field | `AlbumIdentification` builder |
-|-----------------|-------------------------------|
-| Title | `.with_title()` |
-| Artist (main) | `.with_artist()` |
-| Release date year | `.with_year()` (parse from `1994年...`) |
-| Barcode | `.with_barcode()` (add if not already on builder) |
-| Catalog # | `.with_catalog_number()` (add if not already on builder) |
-| Release ID (Tower-specific) | raw-response JSON on `ProviderResult` |
-| Cover image URLs | `AssetProvider::fetch_assets` — one `Asset` per image |
+| Tower MDB field | Provider lookup output |
+|-----------------|------------------------|
+| Title | `ReleaseCandidate.album.title` |
+| Artist (main) | `ReleaseCandidate.album.artist_credit` |
+| Release date year | `ReleaseCandidate.album.year` (parse from `1994年...`) |
+| Barcode | `ReleaseCandidate.release.barcode` plus a learned barcode ID |
+| Catalog # | `ReleaseCandidate.release.catalog_number` plus a learned catalog ID |
+| Release ID (Tower-specific) | provider-qualified candidate key and raw response |
+| Cover image URLs | candidate asset URLs, reused by the artwork stage |
 | Credits | raw-response JSON; only promote to first-class catalog fields once 2+ providers agree |
 | Version list release IDs | raw-response JSON (used to cross-reference other DBs) |
 
-Confidence policy: default to `IdentificationConfidence::Medium` on a barcode hit (user-edited data, occasional errors). Promote to `High` only when the Tower record's 基本情報充実度 is ≥90% and another provider corroborates.
+Confidence is assigned by the provider-neutral candidate scorer, not by Tower.
+An exact barcode/catalog hit contributes evidence; corroboration from another
+music-specific provider ranks ahead of Tower's provider-priority tie-breaker.
 
 ## Empty vs. Missing
 

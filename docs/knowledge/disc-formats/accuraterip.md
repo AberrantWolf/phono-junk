@@ -110,6 +110,18 @@ local algorithms with `checksum`; `checksum_450` is a separate checksum around
 frame 450 used to help find offsets. Equality with `checksum_450` alone never
 verifies a full track.
 
+### Frame-450 checksum
+
+CUETools computes the partial value from exactly one CDDA frame beginning at
+sample `450 * 588` of the offset-adjusted track. The 588 packed stereo samples
+are weighted `1..=588` with the ARv1 32-bit wrapping multiply-and-sum. Moving
+the source window through the reconstructed disc stream makes this a cheap
+offset locator. It narrows the candidates that need a full ARv2 fold, but it is
+not an alternate full-track checksum and cannot establish accuracy by itself.
+This interpretation comes from the `CRC450` accumulation and offset lookup in
+[CUETools' `AccurateRip.cs`](https://github.com/gchudov/cuetools.net/blob/master/CUETools.AccurateRip/AccurateRip.cs), and is consistent with ARver's separate
+primary/partial database fields.
+
 ### Interpreting "confidence"
 
 The confidence byte is the number of submitters whose rips produced this exact checksum. Common rubric:
@@ -123,10 +135,10 @@ Reporting this raw number to the user is more useful than thresholding it; they 
 
 ## Implementation notes (for `phono-junk-accuraterip`)
 
-- **Streaming is fine**: compute both v1 and v2 in a single pass over the PCM. Offset search additionally retains bounded adjacent-track windows.
+- **Streaming is fine for zero offset**: compute both v1 and v2 in a single pass over the PCM. Exhaustive offset search reconstructs the disc stream so internal tracks can borrow adjacent samples.
 - **Handle the triple-skip case**: single-track discs apply both the start-skip (2940) and end-skip (2940) simultaneously. Most rips won't hit this, but test for it.
 - **Offset search**: CUETools searches `-2939..=2939` stereo samples (`5*588-1`). In phono-junk, a positive shift means selecting later PCM samples from the reconstructed disc stream. Internal-track checks must borrow samples from the adjacent tracks while preserving the first/last-disc five-frame exclusion.
-- **Offset acceleration**: weighted sums can be updated with cumulative sums, keeping the search linear in PCM size plus tracks × offset range rather than rereading every track for every shift.
+- **Offset acceleration**: weighted sums can be updated with cumulative sums, keeping the ARv1/frame-450 search linear in PCM size plus tracks × offset range rather than rereading every track for every shift. Only shifts with primary or frame-450 evidence need the nonlinear ARv2 high-word fold.
 - **Failure modes**: drive offset mismatch, non-audio track fed in, data-track-misidentified-as-audio, and silence-padding differences all produce wrong CRCs. The correct response is "no match found" — don't guess; show the user what was computed vs. expected.
 - **Verification is independent of identification**: you can compute AccurateRip CRCs without knowing MusicBrainz DiscID, and vice versa. They answer different questions.
 

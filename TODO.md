@@ -5,26 +5,26 @@ This is the active queue. Historical sprint notes are archived in
 
 ## Now
 
-- [ ] Establish schema v7 as the first forward-migration baseline.
-- [ ] Persist identification and verification evidence independently of the
-  resolved catalog projection.
-- [ ] Correct dBAR matching and finish offset-aware AccurateRip verification.
-- [ ] Introduce `LibrarySession` and an owned, cancellable `JobSupervisor`.
-- [ ] Replace flat provider fan-out with staged discovery and candidate scoring.
-- [ ] Route CLI and GUI catalog use cases through `LibrarySession`.
+- [ ] Run the opt-in 18-track Redumper/AccurateRip acceptance test when the
+  external package is mounted, and record the resulting inferred shift.
+- [ ] Confirm the new macOS and Ubuntu CI jobs on the first pushed branch.
 
 ## Next
 
-- [ ] Add aggregate list/detail queries and use the same aggregate for export.
-- [ ] Finish provider-response reuse for artwork and durable raw-response audit.
-- [ ] Add the real redumper/AccurateRip fixture to the opt-in acceptance suite.
-- [ ] Exercise a sample v7-to-v8 migration in the migration harness.
+- [ ] Add a GUI evidence inspector for provider observations, candidate scores,
+  ambiguity records, and per-track verification results.
+- [ ] Add explicit per-job cancellation controls on top of session-wide joined
+  shutdown if the UI grows concurrent read-only jobs.
+- [ ] Make the first post-v7 schema change only through the exercised forward
+  migration harness.
 
 ## Later
 
 - [ ] Add another Japanese-focused provider after Tower MDB, based on documented
   coverage and responsible-access constraints.
 - [ ] Add CTDB as an independent verification source.
+- [ ] Remove the provider-result compatibility adapter once consensus consumes
+  `ReleaseCandidate` directly.
 - [ ] Extract playback from the GUI if a second consumer appears.
 - [ ] Add player mock-backend tests, persistent now-playing chrome, shortcuts,
   and gapless queueing.
