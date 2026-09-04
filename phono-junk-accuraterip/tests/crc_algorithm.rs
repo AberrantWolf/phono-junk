@@ -7,7 +7,7 @@
 use junk_libs_core::AnalysisError;
 use junk_libs_disc::{PCM_SAMPLES_PER_SECTOR, PcmSector};
 use phono_junk_accuraterip::{
-    SKIP_SAMPLES, TrackCrc, TrackPosition, skip_bounds, track_crc_streaming,
+    SKIP_SAMPLES, TrackCrc, TrackPosition, skip_bounds, track_crc_samples, track_crc_streaming,
 };
 
 /// Build `n_sectors` of all-zero PCM sectors wrapped as `Result`s.
@@ -122,6 +122,19 @@ fn v2_folds_64_bit_product_hi_and_lo() {
     let crc = track_crc_streaming(sectors, total, TrackPosition::Middle).unwrap();
     assert_eq!(crc.v1, 0xFFFF_FFFE);
     assert_eq!(crc.v2, 0xFFFF_FFFF);
+}
+
+#[test]
+fn materialized_and_streaming_paths_share_crc_math() {
+    let sectors = sectors_with_one_sample(10, 1, 0xFFFF_FFFF);
+    let samples: Vec<u32> = sectors
+        .iter()
+        .flat_map(|sector| sector.as_ref().unwrap().iter().copied())
+        .collect();
+    let streamed =
+        track_crc_streaming(sectors, samples.len() as u32, TrackPosition::Middle).unwrap();
+
+    assert_eq!(track_crc_samples(&samples, TrackPosition::Middle), streamed);
 }
 
 #[test]

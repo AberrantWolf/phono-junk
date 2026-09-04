@@ -16,9 +16,9 @@
 use std::path::PathBuf;
 
 use junk_libs_disc::redumper::Ripper;
-use phono_junk_catalog::{Album, Id};
+use phono_junk_catalog::Id;
 use phono_junk_core::IdentificationState;
-use phono_junk_db::{DbError, crud};
+use phono_junk_db::{DbError, aggregate, crud};
 use rusqlite::Connection;
 use serde::Serialize;
 
@@ -154,88 +154,28 @@ impl Default for ListFilters {
     }
 }
 
-/// Flatten every album into a [`ListRow`]. One DB query per album for
-/// its releases + per release for its discs, so O(albums + releases)
-/// queries total. Fine at catalog scale; not intended for huge libraries.
+/// Flatten every album into a [`ListRow`] through the repository's single
+/// aggregate statement.
 pub fn load_list_rows(conn: &Connection) -> Result<Vec<ListRow>, DbError> {
-    let albums = crud::list_albums(conn)?;
-    let mut rows = Vec::with_capacity(albums.len());
-    for album in albums {
-        rows.push(row_for_album(conn, album)?);
-    }
-    Ok(rows)
-}
-
-fn row_for_album(conn: &Connection, album: Album) -> Result<ListRow, DbError> {
-    let releases = crud::list_releases_for_album(conn, album.id)?;
-    let mut disc_count = 0;
-    for r in &releases {
-        disc_count += crud::list_discs_for_release(conn, r.id)?.len();
-    }
-    let (country, label) = releases
-        .iter()
-        .find_map(|r| {
-            let c = r.country.clone();
-            let l = r.label.clone();
-            if c.is_some() || l.is_some() {
-                Some((c, l))
-            } else {
-                None
-            }
-        })
-        .unwrap_or((None, None));
-    let (language, script) = releases
-        .iter()
-        .find_map(|r| {
-            let l = r.language.clone();
-            let s = r.script.clone();
-            if l.is_some() || s.is_some() {
-                Some((l, s))
-            } else {
-                None
-            }
-        })
-        .unwrap_or((None, None));
-    let has_non_redumper_rip = album_has_non_redumper_rip(conn, album.id)?;
-
-    Ok(ListRow {
-        album_id: album.id,
-        title: album.title,
-        artist: album.artist_credit,
-        year: album.year,
-        mbid: album.mbid,
-        country,
-        label,
-        language,
-        script,
-        disc_count,
-        release_count: releases.len(),
-        has_non_redumper_rip,
+    aggregate::list_albums(conn).map(|records| {
+        records
+            .into_iter()
+            .map(|record| ListRow {
+                album_id: record.album_id,
+                title: record.title,
+                artist: record.artist,
+                year: record.year,
+                mbid: record.mbid,
+                country: record.country,
+                label: record.label,
+                language: record.language,
+                script: record.script,
+                disc_count: record.disc_count,
+                release_count: record.release_count,
+                has_non_redumper_rip: record.has_non_redumper_rip,
+            })
+            .collect()
     })
-}
-
-/// Does the album have any rip file that isn't redumper-sourced?
-///
-/// A single per-album round trip via a LEFT JOIN against
-/// `rip_file_provenance`. Good enough at catalog-MVP scale; a batched
-/// JOIN over the whole albums query is the obvious optimisation once a
-/// library grows past low thousands of albums (see TODO.md). `false`
-/// when the album has zero rip files at all — "no rip to audit" isn't
-/// the same signal as "rip exists but isn't redumper."
-fn album_has_non_redumper_rip(conn: &Connection, album_id: Id) -> Result<bool, DbError> {
-    let exists: bool = conn.query_row(
-        "SELECT EXISTS(
-             SELECT 1 FROM rip_files rf
-             INNER JOIN discs d ON rf.disc_id = d.id
-             INNER JOIN releases r ON d.release_id = r.id
-             LEFT JOIN rip_file_provenance rfp ON rfp.rip_file_id = rf.id
-             WHERE r.album_id = ?1
-               AND (rfp.ripper IS NULL OR rfp.ripper != 'redumper')
-         )",
-        [album_id],
-        |row| row.get(0),
-    )?;
-    Ok(exists)
 }
 
 /// Apply every populated filter field; empty filters pass everything.
@@ -648,6 +588,7 @@ mod tests {
                 identification_source: None,
                 accuraterip_status: None,
                 last_verified_at: None,
+                inferred_sample_shift: None,
                 last_identify_errors: None,
                 last_identify_at: None,
                 provenance: Some(prov),
@@ -671,6 +612,7 @@ mod tests {
                 identification_source: None,
                 accuraterip_status: None,
                 last_verified_at: None,
+                inferred_sample_shift: None,
                 last_identify_errors: None,
                 last_identify_at: None,
                 provenance: None,
@@ -744,7 +686,6 @@ mod tests {
                     cddb_id: None,
                     ar_discid1: None,
                     ar_discid2: None,
-                    dbar_raw: None,
                     mcn: None,
                 },
             )
@@ -767,6 +708,7 @@ mod tests {
                     identification_source: None,
                     accuraterip_status: None,
                     last_verified_at: None,
+                    inferred_sample_shift: None,
                     last_identify_errors: None,
                     last_identify_at: None,
                     provenance: prov,
@@ -780,7 +722,7 @@ mod tests {
         let conn = open_memory().unwrap();
 
         // Album A: one disc, one redumper rip. Should be false.
-        let (a, a_disc) = seed_album(&conn, "A");
+        let (_a, a_disc) = seed_album(&conn, "A");
         insert_rip(
             &conn,
             a_disc,
@@ -793,12 +735,19 @@ mod tests {
                 rip_date: None,
             }),
         );
-        assert!(!album_has_non_redumper_rip(&conn, a).unwrap());
+        assert!(!load_list_rows(&conn).unwrap()[0].has_non_redumper_rip);
 
         // Album B: one disc, one rip with no provenance. Should be true.
         let (b, b_disc) = seed_album(&conn, "B");
         insert_rip(&conn, b_disc, None);
-        assert!(album_has_non_redumper_rip(&conn, b).unwrap());
+        assert!(
+            load_list_rows(&conn)
+                .unwrap()
+                .into_iter()
+                .find(|row| row.album_id == b)
+                .unwrap()
+                .has_non_redumper_rip
+        );
 
         // Album C: one disc, one EAC-class rip. Should be true.
         let (c, c_disc) = seed_album(&conn, "C");
@@ -814,11 +763,25 @@ mod tests {
                 rip_date: None,
             }),
         );
-        assert!(album_has_non_redumper_rip(&conn, c).unwrap());
+        assert!(
+            load_list_rows(&conn)
+                .unwrap()
+                .into_iter()
+                .find(|row| row.album_id == c)
+                .unwrap()
+                .has_non_redumper_rip
+        );
 
         // Album D: no rip files at all. Should be false (not audit-worthy).
         let (d, _) = seed_album(&conn, "D");
-        assert!(!album_has_non_redumper_rip(&conn, d).unwrap());
+        assert!(
+            !load_list_rows(&conn)
+                .unwrap()
+                .into_iter()
+                .find(|row| row.album_id == d)
+                .unwrap()
+                .has_non_redumper_rip
+        );
     }
 
     #[test]

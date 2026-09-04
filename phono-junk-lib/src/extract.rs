@@ -15,10 +15,10 @@ use std::path::{Path, PathBuf};
 
 use junk_libs_disc::{TrackLayout, TrackPcmReader};
 use phono_junk_catalog::{Album, Asset, Disc, Id, Release, RipFile, Track};
-use phono_junk_db::{DbError, crud};
+use phono_junk_db::{DbError, aggregate, crud};
 use phono_junk_extract::{
-    ExtractError as ExtractPrimitiveError, TrackTags, encode_flac_track, plan_disc_directory,
-    plan_output_paths,
+    EmbeddedPicture, ExtractError as ExtractPrimitiveError, TrackTags, encode_flac_track,
+    plan_disc_directory, plan_output_paths,
 };
 use phono_junk_identify::HttpError;
 use rusqlite::Connection;
@@ -31,7 +31,7 @@ use crate::env;
 pub struct ExportedDisc {
     pub disc_id: Id,
     pub written: Vec<PathBuf>,
-    /// Whether a cover file was produced (`cover.jpg` alongside the FLACs).
+    /// Whether a detected-format cover file was produced alongside the FLACs.
     pub cover_written: bool,
 }
 
@@ -58,6 +58,8 @@ pub enum ExportError {
     MissingRipFile(Id),
     #[error("disc {0} has no usable source: cue_path and chd_path both empty")]
     NoRipSource(Id),
+    #[error("asset {asset_id} is not a supported JPEG, PNG, or WebP image")]
+    UnsupportedArtwork { asset_id: Id },
     #[error(
         "no HttpClient registered on PhonoContext; use with_default_providers() or set ctx.http"
     )]
@@ -80,14 +82,62 @@ impl ExportError {
 }
 
 impl PhonoContext {
+    /// Resolve the same catalog aggregate as export and return the paths that
+    /// would be produced, without reading PCM, fetching artwork, or writing.
+    pub fn plan_export_disc(
+        &self,
+        conn: &Connection,
+        disc_id: Id,
+        library_root: &Path,
+    ) -> Result<ExportedDisc, ExportError> {
+        let aggregate =
+            aggregate::load_for_disc(conn, disc_id)?.ok_or(ExportError::MissingRow("disc"))?;
+        let disc = aggregate
+            .discs
+            .iter()
+            .find(|disc| disc.id == disc_id)
+            .ok_or(ExportError::MissingRow("disc"))?;
+        let release = aggregate
+            .releases
+            .iter()
+            .find(|release| release.id == disc.release_id)
+            .ok_or(ExportError::MissingRow("release"))?;
+        let tracks: Vec<_> = aggregate
+            .tracks
+            .iter()
+            .filter(|track| track.disc_id == disc_id)
+            .cloned()
+            .collect();
+        let total_discs = aggregate
+            .discs
+            .iter()
+            .filter(|item| item.release_id == release.id)
+            .count()
+            .max(1) as u8;
+        let album_artist = resolve_album_artist(&aggregate.album, &tracks);
+        let written = plan_output_paths(
+            library_root,
+            &aggregate.album,
+            disc.disc_number,
+            total_discs,
+            &tracks,
+            Some(&album_artist),
+        );
+        Ok(ExportedDisc {
+            disc_id,
+            written,
+            cover_written: false,
+        })
+    }
+
     /// Encode every track of `disc_id` into FLAC files under `library_root`,
-    /// embed Vorbis tags + front-cover art, and drop a `cover.jpg` sidecar.
+    /// embed Vorbis tags + front-cover art, and drop a `cover.<detected-ext>` sidecar.
     ///
     /// Cover bytes are fetched on first export via [`cache_asset_bytes`] into
     /// the OS cache dir ([`env::default_asset_cache_dir`]); the `Asset.file_path`
     /// column is updated to that absolute path so subsequent exports and GUI
     /// detail-panel views skip the fetch. The cache is process-wide, not
-    /// library-specific — the exported `cover.jpg` sidecar and embedded
+    /// library-specific — the exported cover sidecar and embedded
     /// FLAC art are what travel with the library.
     pub fn export_disc(
         &self,
@@ -95,17 +145,45 @@ impl PhonoContext {
         disc_id: Id,
         library_root: &Path,
     ) -> Result<ExportedDisc, ExportError> {
-        let disc = crud::get_disc(conn, disc_id)?.ok_or(ExportError::MissingRow("disc"))?;
-        let release =
-            crud::get_release(conn, disc.release_id)?.ok_or(ExportError::MissingRow("release"))?;
-        let album =
-            crud::get_album(conn, release.album_id)?.ok_or(ExportError::MissingRow("album"))?;
-        let tracks = crud::list_tracks_for_disc(conn, disc_id)?;
-        let assets = crud::list_assets_for_release(conn, release.id)?;
-        let sibling_discs = crud::list_discs_for_release(conn, release.id)?;
-        let total_discs = sibling_discs.len().max(1) as u8;
+        let aggregate =
+            aggregate::load_for_disc(conn, disc_id)?.ok_or(ExportError::MissingRow("disc"))?;
+        let disc = aggregate
+            .discs
+            .iter()
+            .find(|disc| disc.id == disc_id)
+            .cloned()
+            .ok_or(ExportError::MissingRow("disc"))?;
+        let release = aggregate
+            .releases
+            .iter()
+            .find(|release| release.id == disc.release_id)
+            .cloned()
+            .ok_or(ExportError::MissingRow("release"))?;
+        let album = aggregate.album;
+        let tracks: Vec<_> = aggregate
+            .tracks
+            .iter()
+            .filter(|track| track.disc_id == disc_id)
+            .cloned()
+            .collect();
+        let assets: Vec<_> = aggregate
+            .assets
+            .iter()
+            .filter(|asset| asset.release_id == release.id)
+            .cloned()
+            .collect();
+        let total_discs = aggregate
+            .discs
+            .iter()
+            .filter(|item| item.release_id == release.id)
+            .count()
+            .max(1) as u8;
 
-        let rip_file = crud::find_rip_file_for_disc(conn, disc_id)?
+        let rip_file = aggregate
+            .rip_files
+            .iter()
+            .find(|rip| rip.disc_id == Some(disc_id))
+            .cloned()
             .ok_or(ExportError::MissingRipFile(disc_id))?;
 
         let album_artist = resolve_album_artist(&album, &tracks);
@@ -126,7 +204,7 @@ impl PhonoContext {
         );
 
         let cache_dir = resolve_asset_cache_dir(library_root);
-        let cover_bytes = resolve_cover_bytes(self, conn, &assets, &cache_dir)?;
+        let cover = resolve_cover(self, conn, &assets, &cache_dir)?;
 
         let layouts = load_track_layouts(&rip_file, disc_id)?;
         verify_layouts_match_tracks(&layouts, &tracks, disc_id)?;
@@ -144,14 +222,18 @@ impl PhonoContext {
                 total_discs,
                 &album_artist,
             );
-            encode_flac_track(pcm, total_samples, &tags, cover_bytes.as_deref(), out_path)?;
+            let picture = cover.as_ref().map(|art| EmbeddedPicture {
+                mime_type: art.kind.mime_type(),
+                bytes: &art.bytes,
+            });
+            encode_flac_track(pcm, total_samples, &tags, picture, out_path)?;
             written.push(out_path.clone());
         }
 
-        let cover_written = if let Some(bytes) = cover_bytes.as_deref() {
+        let cover_written = if let Some(art) = cover.as_ref() {
             fs::create_dir_all(&disc_dir).map_err(|e| ExportError::io(&disc_dir, e))?;
-            let cover_path = disc_dir.join("cover.jpg");
-            fs::write(&cover_path, bytes).map_err(|e| ExportError::io(&cover_path, e))?;
+            let cover_path = disc_dir.join(format!("cover.{}", art.kind.extension()));
+            fs::write(&cover_path, &art.bytes).map_err(|e| ExportError::io(&cover_path, e))?;
             written.push(cover_path);
             true
         } else {
@@ -302,17 +384,61 @@ fn resolve_asset_cache_dir(library_root: &Path) -> PathBuf {
 /// Pick the front-cover asset, ensure its bytes are locally cached, and
 /// return those bytes. Returns `Ok(None)` if the release has no front
 /// cover at all — export proceeds without embedded art.
-fn resolve_cover_bytes(
+fn resolve_cover(
     ctx: &PhonoContext,
     conn: &Connection,
     assets: &[Asset],
     cache_dir: &Path,
-) -> Result<Option<Vec<u8>>, ExportError> {
+) -> Result<Option<ResolvedArtwork>, ExportError> {
     let Some(asset) = phono_junk_catalog::pick_front_cover(assets) else {
         return Ok(None);
     };
     let bytes = cache_asset_bytes(ctx, conn, asset, cache_dir)?;
-    Ok(Some(bytes))
+    let kind = ArtworkKind::detect(&bytes)
+        .ok_or(ExportError::UnsupportedArtwork { asset_id: asset.id })?;
+    Ok(Some(ResolvedArtwork { bytes, kind }))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArtworkKind {
+    Jpeg,
+    Png,
+    WebP,
+}
+
+impl ArtworkKind {
+    fn detect(bytes: &[u8]) -> Option<Self> {
+        if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+            Some(Self::Jpeg)
+        } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            Some(Self::Png)
+        } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+            Some(Self::WebP)
+        } else {
+            None
+        }
+    }
+
+    fn mime_type(self) -> &'static str {
+        match self {
+            Self::Jpeg => "image/jpeg",
+            Self::Png => "image/png",
+            Self::WebP => "image/webp",
+        }
+    }
+
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Jpeg => "jpg",
+            Self::Png => "png",
+            Self::WebP => "webp",
+        }
+    }
+}
+
+struct ResolvedArtwork {
+    bytes: Vec<u8>,
+    kind: ArtworkKind,
 }
 
 /// Read an [`Asset`]'s bytes from the on-disk cache, downloading and
@@ -362,7 +488,21 @@ pub fn cache_asset_bytes(
             status: resp.status,
         });
     }
-    let ext = cover_extension(&resp.content_type, url);
+    let kind = ArtworkKind::detect(&resp.body)
+        .ok_or(ExportError::UnsupportedArtwork { asset_id: asset.id })?;
+    if let Some(content_type) = resp.content_type.as_deref()
+        && !content_type
+            .split(';')
+            .next()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case(kind.mime_type()))
+    {
+        log::warn!(
+            "asset {} content type {content_type:?} disagrees with detected {}; using detected type",
+            asset.id,
+            kind.mime_type()
+        );
+    }
+    let ext = kind.extension();
     fs::create_dir_all(cache_dir).map_err(|e| ExportError::io(cache_dir, e))?;
     let filename = format!("{}.{}", asset.id, ext);
     let abs_path = cache_dir.join(&filename);
@@ -374,36 +514,6 @@ pub fn cache_asset_bytes(
     updated.file_path = Some(abs_path);
     crud::update_asset(conn, &updated)?;
     Ok(resp.body)
-}
-
-/// Decide a file extension for the cached cover. Prefers Content-Type;
-/// falls back to URL suffix; defaults to `jpg`.
-fn cover_extension(content_type: &Option<String>, url: &str) -> String {
-    if let Some(ct) = content_type.as_deref() {
-        let ct = ct
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_ascii_lowercase();
-        match ct.as_str() {
-            "image/jpeg" | "image/jpg" => return "jpg".into(),
-            "image/png" => return "png".into(),
-            "image/webp" => return "webp".into(),
-            _ => {}
-        }
-    }
-    let lower = url.to_ascii_lowercase();
-    for ext in ["jpg", "jpeg", "png", "webp"] {
-        if lower.ends_with(&format!(".{ext}")) {
-            return if ext == "jpeg" {
-                "jpg".into()
-            } else {
-                ext.into()
-            };
-        }
-    }
-    "jpg".into()
 }
 
 #[cfg(test)]
@@ -467,34 +577,37 @@ mod tests {
     }
 
     #[test]
-    fn cover_extension_prefers_content_type() {
+    fn artwork_kind_is_detected_from_bytes() {
         assert_eq!(
-            cover_extension(&Some("image/png".into()), "http://x/y.jpg"),
-            "png"
+            ArtworkKind::detect(b"\xff\xd8\xffrest"),
+            Some(ArtworkKind::Jpeg)
         );
         assert_eq!(
-            cover_extension(&Some("image/jpeg; charset=binary".into()), "http://x/y"),
-            "jpg"
+            ArtworkKind::detect(b"\x89PNG\r\n\x1a\nrest"),
+            Some(ArtworkKind::Png)
         );
-    }
-
-    #[test]
-    fn cover_extension_falls_back_to_url() {
-        assert_eq!(cover_extension(&None, "http://x/y.PNG"), "png");
-        assert_eq!(cover_extension(&None, "http://x/y.jpeg"), "jpg");
-        assert_eq!(cover_extension(&None, "http://x/y"), "jpg");
+        assert_eq!(
+            ArtworkKind::detect(b"RIFF1234WEBPrest"),
+            Some(ArtworkKind::WebP)
+        );
+        assert_eq!(ArtworkKind::detect(b"not-an-image"), None);
     }
 
     fn mk_asset(id: Id, file_path: Option<PathBuf>, source_url: Option<&str>) -> Asset {
         Asset {
             id,
             release_id: 0,
+            provider: "test".into(),
             asset_type: phono_junk_catalog::AssetType::FrontCover,
             group_id: None,
             sequence: 0,
             source_url: source_url.map(String::from),
             file_path,
-            scraped_at: None,
+            width: None,
+            height: None,
+            confidence: None,
+            mime_type: None,
+            acquired_at: None,
         }
     }
 

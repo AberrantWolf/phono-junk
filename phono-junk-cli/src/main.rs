@@ -4,14 +4,13 @@ mod output;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use phono_junk_catalog::Id;
-use phono_junk_db::crud;
 use phono_junk_lib::{
-    ExportedDisc, IngestOutcome, ListFilters, ListRow, PhonoContext, ScanEvent, ScanOpts,
-    ScanSummary, UnidentifiedRow, VerifySummary, VerifyTarget, YearSpec, filter_rows, ingest_path,
-    load_list_rows,
+    CATALOG_SCHEMA_VERSION, ExportedDisc, Id, IdentificationDisposition, IngestOutcome,
+    LibrarySession, ListEntry, ListFilters, ListRow, PhonoContext, RefreshPolicy, ScanEvent,
+    ScanRequest, ScanSummary, UnidentifiedRow, VerifySummary, VerifyTarget, YearSpec, filter_rows,
 };
 
 use crate::env::{CliEnv, OutputFormat, open_env};
@@ -50,6 +49,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Destructively rebuild the alpha catalog at schema v7.
+    Reset {
+        /// Required acknowledgement that the catalog, WAL, and SHM files are deleted.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Scan a directory tree for CD rips and identify them.
     Scan {
         root: PathBuf,
@@ -175,6 +180,7 @@ fn init_logger(verbose: u8) {
 fn dispatch(cli: &Cli) -> Result<ExitCode, CliError> {
     let fmt = OutputFormat::parse(&cli.format)?;
     match &cli.command {
+        Command::Reset { yes } => run_reset(cli, fmt, *yes),
         Command::Scan {
             root,
             force_refresh,
@@ -211,6 +217,31 @@ fn dispatch(cli: &Cli) -> Result<ExitCode, CliError> {
     }
 }
 
+fn run_reset(cli: &Cli, fmt: OutputFormat, yes: bool) -> Result<ExitCode, CliError> {
+    if !yes {
+        return Err(CliError::InvalidArg(
+            "reset deletes the catalog; re-run with `reset --yes` to confirm".into(),
+        ));
+    }
+    let path = env::resolve_db_path(cli.db.as_deref())?;
+    drop(LibrarySession::rebuild(
+        path.clone(),
+        Arc::new(PhonoContext::new()),
+    )?);
+    emit(
+        fmt,
+        &serde_json::json!({ "database": path, "schema": CATALOG_SCHEMA_VERSION }),
+        |_| {
+            format!(
+                "rebuilt {} at schema v{}",
+                path.display(),
+                CATALOG_SCHEMA_VERSION
+            )
+        },
+    )?;
+    Ok(ExitCode::SUCCESS)
+}
+
 // ---------------------------------------------------------------------------
 // scan
 // ---------------------------------------------------------------------------
@@ -225,13 +256,20 @@ fn run_scan(
     if !root.is_dir() {
         return Err(CliError::MissingPath(root.to_path_buf()));
     }
-    let CliEnv { conn, ctx, .. } =
-        open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
-    let opts = ScanOpts {
-        force_refresh,
-        identify: !no_identify,
+    let CliEnv { session, .. } = open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
+    let opts = ScanRequest {
+        refresh: if force_refresh {
+            RefreshPolicy::Force
+        } else {
+            RefreshPolicy::UseCache
+        },
+        identification: if no_identify {
+            IdentificationDisposition::MetadataOnly
+        } else {
+            IdentificationDisposition::Inline
+        },
     };
-    let summary = ctx.scan_library(&conn, root, opts, |ev| print_scan_event(&ev))?;
+    let summary = session.scan(root, opts, |ev| print_scan_event(&ev))?;
 
     emit(fmt, &summary, format_scan_summary)?;
     Ok(ExitCode::SUCCESS)
@@ -322,11 +360,10 @@ fn run_identify(
     force_refresh: bool,
     queued: bool,
 ) -> Result<ExitCode, CliError> {
-    let CliEnv { conn, ctx, .. } =
-        open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
+    let CliEnv { session, .. } = open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
 
     if queued {
-        return run_identify_queued(&conn, &ctx, fmt, force_refresh);
+        return run_identify_queued(&session, fmt, force_refresh);
     }
 
     let path =
@@ -334,12 +371,16 @@ fn run_identify(
     if !path.exists() {
         return Err(CliError::MissingPath(path.to_path_buf()));
     }
-    let opts = ScanOpts {
-        force_refresh,
-        identify: true,
+    let opts = ScanRequest {
+        refresh: if force_refresh {
+            RefreshPolicy::Force
+        } else {
+            RefreshPolicy::UseCache
+        },
+        identification: IdentificationDisposition::Inline,
     };
-    let outcome = ingest_path(&ctx, &conn, path, &opts)?;
-    let output = identify_output_from_outcome(&conn, outcome)?;
+    let outcome = session.identify_path(path, opts)?;
+    let output = identify_output_from_outcome(&session, outcome)?;
     for (name, msg) in &output.provider_errors {
         log::warn!("provider {name}: {msg}");
     }
@@ -356,27 +397,22 @@ struct QueueDrainSummary {
 }
 
 fn run_identify_queued(
-    conn: &rusqlite::Connection,
-    ctx: &PhonoContext,
+    session: &LibrarySession,
     fmt: OutputFormat,
     force_refresh: bool,
 ) -> Result<ExitCode, CliError> {
-    use phono_junk_core::IdentificationState;
-    let queue = crud::list_rip_files_by_state(
-        conn,
-        &[IdentificationState::Queued, IdentificationState::Failed],
-    )?;
+    let queue = session.queued_rip_ids()?;
     let total = queue.len();
     let mut identified = 0usize;
     let mut unidentified = 0usize;
     let mut failed = 0usize;
-    for rip in queue {
-        match phono_junk_lib::scan::identify_one(ctx, conn, rip.id, force_refresh) {
+    for rip_file_id in queue {
+        match session.identify_rip(rip_file_id, force_refresh) {
             Ok(disc) if disc.identified => identified += 1,
             Ok(_) => unidentified += 1,
             Err(e) => {
                 failed += 1;
-                log::warn!("identify queue rip_file={}: {e}", rip.id);
+                log::warn!("identify queue rip_file={rip_file_id}: {e}");
             }
         }
     }
@@ -396,7 +432,7 @@ fn run_identify_queued(
 }
 
 fn identify_output_from_outcome(
-    conn: &rusqlite::Connection,
+    session: &LibrarySession,
     outcome: IngestOutcome,
 ) -> Result<IdentifyOutput, CliError> {
     match outcome {
@@ -404,20 +440,19 @@ fn identify_output_from_outcome(
             rip_file_id,
             disc_id,
         } => {
-            let (title, artist, year, album_id, release_id) =
-                album_summary_for_disc(conn, disc_id)?;
+            let summary = session.album_summary_for_disc(disc_id)?;
             Ok(IdentifyOutput {
                 rip_file_id,
                 disc_id: Some(disc_id),
-                album_id,
-                release_id,
+                album_id: summary.as_ref().map(|item| item.album_id),
+                release_id: summary.as_ref().and_then(|item| item.release_id),
                 identified: true,
                 cached: true,
                 any_disagreements: false,
                 asset_count: 0,
-                title,
-                artist,
-                year,
+                title: summary.as_ref().map(|item| item.title.clone()),
+                artist: summary.as_ref().and_then(|item| item.artist.clone()),
+                year: summary.as_ref().and_then(|item| item.year),
                 provider_errors: Vec::new(),
             })
         }
@@ -436,11 +471,11 @@ fn identify_output_from_outcome(
             provider_errors: Vec::new(),
         }),
         IngestOutcome::Identified { rip_file_id, disc } => {
-            let (title, artist, year) = if let Some(album_id) = disc.album_id {
-                album_summary(conn, album_id)?
-            } else {
-                (None, None, None)
-            };
+            let summary = disc
+                .disc_id
+                .map(|disc_id| session.album_summary_for_disc(disc_id))
+                .transpose()?
+                .flatten();
             Ok(IdentifyOutput {
                 rip_file_id,
                 disc_id: disc.disc_id,
@@ -450,55 +485,13 @@ fn identify_output_from_outcome(
                 cached: disc.cached,
                 any_disagreements: disc.any_disagreements,
                 asset_count: disc.asset_count,
-                title,
-                artist,
-                year,
+                title: summary.as_ref().map(|item| item.title.clone()),
+                artist: summary.as_ref().and_then(|item| item.artist.clone()),
+                year: summary.as_ref().and_then(|item| item.year),
                 provider_errors: disc.provider_errors,
             })
         }
     }
-}
-
-type AlbumSummary = (Option<String>, Option<String>, Option<u16>);
-type DiscAlbumSummary = (
-    Option<String>,
-    Option<String>,
-    Option<u16>,
-    Option<Id>,
-    Option<Id>,
-);
-
-fn album_summary_for_disc(
-    conn: &rusqlite::Connection,
-    disc_id: Id,
-) -> Result<DiscAlbumSummary, CliError> {
-    let disc = crud::get_disc(conn, disc_id)?;
-    let Some(disc) = disc else {
-        return Ok((None, None, None, None, None));
-    };
-    let release = crud::get_release(conn, disc.release_id)?;
-    let Some(release) = release else {
-        return Ok((None, None, None, None, Some(disc.release_id)));
-    };
-    let album = crud::get_album(conn, release.album_id)?;
-    match album {
-        Some(a) => Ok((
-            Some(a.title),
-            a.artist_credit,
-            a.year,
-            Some(a.id),
-            Some(release.id),
-        )),
-        None => Ok((None, None, None, Some(release.album_id), Some(release.id))),
-    }
-}
-
-fn album_summary(conn: &rusqlite::Connection, album_id: Id) -> Result<AlbumSummary, CliError> {
-    let album = crud::get_album(conn, album_id)?;
-    Ok(match album {
-        Some(a) => (Some(a.title), a.artist_credit, a.year),
-        None => (None, None, None),
-    })
 }
 
 fn format_identify_output(o: &IdentifyOutput) -> String {
@@ -553,9 +546,8 @@ fn run_verify(
         }
         (Some(_), Some(_)) => unreachable!("clap conflicts_with"),
     };
-    let CliEnv { conn, ctx, .. } =
-        open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
-    let summary = ctx.verify_disc(&conn, target)?;
+    let CliEnv { session, .. } = open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
+    let summary = session.verify(target)?;
     emit(fmt, &summary, format_verify_summary)?;
     Ok(ExitCode::SUCCESS)
 }
@@ -569,12 +561,14 @@ fn format_verify_summary(s: &VerifySummary) -> String {
         );
     }
     let mut lines = vec![format!(
-        "Disc {}: {}/{} accurate (max confidence {}), {} mismatched.",
+        "Disc {}: {}/{} accurate (max confidence {}), {} mismatched; inferred shift {:?}, ripper offset {:?}.",
         s.disc_id,
         s.accurate,
         s.per_track.len(),
         s.max_confidence,
         s.mismatched,
+        s.inferred_sample_shift,
+        s.ripper_read_offset,
     )];
     for t in &s.per_track {
         if !t.verified {
@@ -604,21 +598,20 @@ fn run_export(
     out: &Path,
     dry_run: bool,
 ) -> Result<ExitCode, CliError> {
-    let CliEnv { conn, ctx, .. } =
-        open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
+    let CliEnv { session, .. } = open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, true)?;
     if !out.exists() {
         std::fs::create_dir_all(out)?;
     }
 
     if dry_run {
-        let output = plan_export_dryrun(&conn, &ctx, disc_ids, out)?;
+        let output = plan_export_dryrun(&session, disc_ids, out)?;
         emit(fmt, &output, format_export_output)?;
         return Ok(ExitCode::SUCCESS);
     }
 
     let mut discs = Vec::with_capacity(disc_ids.len());
     for id in disc_ids {
-        let ed = ctx.export_disc(&conn, *id, out)?;
+        let ed = session.export_disc(*id, out)?;
         discs.push(ed);
     }
     let output = ExportOutput { discs, dry_run };
@@ -627,47 +620,13 @@ fn run_export(
 }
 
 fn plan_export_dryrun(
-    conn: &rusqlite::Connection,
-    _ctx: &PhonoContext,
+    session: &LibrarySession,
     disc_ids: &[Id],
     out: &Path,
 ) -> Result<ExportOutput, CliError> {
-    use phono_junk_extract::{plan_disc_directory, plan_output_paths};
     let mut discs = Vec::with_capacity(disc_ids.len());
     for id in disc_ids {
-        let disc = crud::get_disc(conn, *id)?
-            .ok_or_else(|| CliError::InvalidArg(format!("disc {id} not found")))?;
-        let release = crud::get_release(conn, disc.release_id)?
-            .ok_or_else(|| CliError::InvalidArg(format!("release {} missing", disc.release_id)))?;
-        let album = crud::get_album(conn, release.album_id)?
-            .ok_or_else(|| CliError::InvalidArg(format!("album {} missing", release.album_id)))?;
-        let tracks = crud::list_tracks_for_disc(conn, *id)?;
-        let sibling_discs = crud::list_discs_for_release(conn, release.id)?;
-        let total_discs = sibling_discs.len().max(1) as u8;
-        let album_artist = album
-            .artist_credit
-            .clone()
-            .unwrap_or_else(|| "Unknown Artist".into());
-        let planned = plan_output_paths(
-            out,
-            &album,
-            disc.disc_number,
-            total_discs,
-            &tracks,
-            Some(&album_artist),
-        );
-        let disc_dir = plan_disc_directory(
-            out,
-            &album,
-            disc.disc_number,
-            total_discs,
-            Some(&album_artist),
-        );
-        discs.push(ExportedDisc {
-            disc_id: *id,
-            written: [&[disc_dir][..], &planned].concat(),
-            cover_written: false,
-        });
+        discs.push(session.plan_export_disc(*id, out)?);
     }
     Ok(ExportOutput {
         discs,
@@ -718,9 +677,11 @@ enum AuditOutput {
 fn run_audit(cli: &Cli, fmt: OutputFormat, missing_redumper: bool) -> Result<ExitCode, CliError> {
     use phono_junk_lib::audit;
 
-    let CliEnv { conn, .. } = open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, false)?;
+    let CliEnv { session, .. } =
+        open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, false)?;
     let output = if missing_redumper {
-        let rows = audit::list_missing_redumper(&conn)?
+        let rows = session
+            .audit_missing_redumper()?
             .into_iter()
             .map(|r| AuditMissingRow {
                 rip_file_id: r.rip_file_id,
@@ -732,7 +693,7 @@ fn run_audit(cli: &Cli, fmt: OutputFormat, missing_redumper: bool) -> Result<Exi
             .collect();
         AuditOutput::MissingRedumper(rows)
     } else {
-        let s = audit::summarize(&conn)?;
+        let s = session.audit_summary()?;
         AuditOutput::Summary(AuditSummaryOutput {
             total: s.total,
             redumper: s.redumper_count(),
@@ -866,17 +827,16 @@ fn run_list(
     label: Option<&str>,
     unidentified: bool,
 ) -> Result<ExitCode, CliError> {
-    let CliEnv { conn, .. } = open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, false)?;
+    let CliEnv { session, .. } =
+        open_env(cli.db.as_deref(), cli.user_agent.as_deref(), fmt, false)?;
 
     let output = if unidentified {
-        let rows = crud::list_unidentified_rip_files(&conn)?
+        let rows = session
+            .list_entries()?
             .into_iter()
-            .map(|r| UnidentifiedRow {
-                rip_file_id: r.id,
-                cue_path: r.cue_path,
-                chd_path: r.chd_path,
-                ripper: r.provenance.as_ref().map(|p| p.ripper),
-                state: r.identification_state,
+            .filter_map(|entry| match entry {
+                ListEntry::Unidentified(row) => Some(row),
+                ListEntry::Album(_) => None,
             })
             .collect();
         ListOutput::Unidentified(rows)
@@ -892,7 +852,7 @@ fn run_list(
             label: label.map(String::from),
             ..Default::default()
         };
-        let rows = load_list_rows(&conn)?;
+        let rows = session.list_rows()?;
         ListOutput::Albums(filter_rows(rows, &filters))
     };
 

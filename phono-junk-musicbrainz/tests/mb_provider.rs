@@ -6,7 +6,7 @@
 
 use phono_junk_core::{DiscIds, Toc};
 use phono_junk_identify::{Credentials, IdentificationProvider};
-use phono_junk_musicbrainz::{MusicBrainzProvider, parse_discid_response};
+use phono_junk_musicbrainz::{MusicBrainzProvider, parse_discid_candidates, parse_discid_response};
 
 const FIXTURE_SINGLE: &[u8] = include_bytes!("fixtures/discid_single_release.json");
 const FIXTURE_NO_MATCH: &[u8] = include_bytes!("fixtures/discid_no_match.json");
@@ -77,6 +77,31 @@ fn multi_release_picks_first() {
 }
 
 #[test]
+fn candidate_parser_retains_every_matching_release_and_physical_medium() {
+    let body = br#"{
+      "releases": [
+        {"id":"r1","title":"One","media":[
+          {"position":1,"discs":[{"id":"other"}],"tracks":[]},
+          {"position":2,"discs":[{"id":"wanted"}],"tracks":[{"position":1,"title":"A"}]}
+        ]},
+        {"id":"r2","title":"Two","media":[
+          {"position":1,"discs":[{"id":"wanted"}],"tracks":[{"position":1,"title":"B"}]}
+        ]}
+      ]
+    }"#;
+    let lookup = parse_discid_candidates(body, "wanted").unwrap();
+    assert_eq!(lookup.release_candidates.len(), 2);
+    assert_eq!(lookup.release_candidates[0].physical_disc_number, Some(2));
+    assert_eq!(lookup.release_candidates[1].physical_disc_number, Some(1));
+    assert!(
+        lookup
+            .release_candidates
+            .iter()
+            .all(|candidate| candidate.exact_disc_association)
+    );
+}
+
+#[test]
 fn invalid_json_maps_to_parse_error() {
     let err = parse_discid_response(b"{").expect_err("bad JSON");
     assert!(
@@ -90,9 +115,9 @@ fn provider_with_no_mb_discid_skips_lookup() {
     let provider = MusicBrainzProvider::new("phono-junk-tests/0.1 (+tests@example.invalid)")
         .expect("construct provider");
     let result = provider
-        .lookup(&toc_stub(), &DiscIds::default(), &Credentials::new())
+        .lookup_many(&toc_stub(), &DiscIds::default(), &Credentials::new())
         .expect("lookup ok when no DiscID");
-    assert!(result.is_none());
+    assert!(result.release_candidates.is_empty());
 }
 
 /// Live smoke test against musicbrainz.org. Gated behind `#[ignore]`.
@@ -111,8 +136,12 @@ fn live_lookup_against_musicbrainz() {
         ..Default::default()
     };
     let result = provider
-        .lookup(&toc_stub(), &ids, &Credentials::new())
+        .lookup_many(&toc_stub(), &ids, &Credentials::new())
         .expect("live lookup");
-    let result = result.expect("DiscID should match a real release");
-    assert!(result.album.and_then(|a| a.title).is_some());
+    let result = result
+        .release_candidates
+        .into_iter()
+        .next()
+        .expect("DiscID should match a real release");
+    assert!(result.album.title.is_some());
 }

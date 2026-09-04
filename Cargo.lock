@@ -4005,19 +4005,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "phono-junk-amazon"
-version = "0.1.0"
-dependencies = [
- "log",
- "phono-junk-core",
- "phono-junk-identify",
- "reqwest",
- "serde",
- "serde_json",
- "url",
-]
-
-[[package]]
 name = "phono-junk-barcodelookup"
 version = "0.1.0"
 dependencies = [
@@ -4051,14 +4038,10 @@ dependencies = [
  "env_logger",
  "httpmock",
  "log",
- "phono-junk-accuraterip",
  "phono-junk-catalog",
  "phono-junk-core",
  "phono-junk-db",
- "phono-junk-extract",
- "phono-junk-identify",
  "phono-junk-lib",
- "phono-junk-toc",
  "predicates",
  "rpassword",
  "rusqlite",
@@ -4091,6 +4074,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4143,6 +4128,7 @@ dependencies = [
  "rfd",
  "rusqlite",
  "serde",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 
@@ -4184,14 +4170,12 @@ dependencies = [
  "chrono",
  "claxon",
  "dirs",
- "governor",
  "httpmock",
  "junk-libs-core",
  "junk-libs-disc",
  "keyring",
  "log",
  "metaflac",
- "nonzero_ext",
  "phono-junk-accuraterip",
  "phono-junk-barcodelookup",
  "phono-junk-catalog",
@@ -4207,6 +4191,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
  "toml",
@@ -5985,6 +5970,7 @@ version = "1.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddd74a9687298c6858e9b88ec8935ec45d22e8fd5e6394fa1bd4e99a87789c76"
 dependencies = [
+ "getrandom 0.4.2",
  "js-sys",
  "serde_core",
  "wasm-bindgen",

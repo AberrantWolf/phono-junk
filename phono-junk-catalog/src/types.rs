@@ -6,6 +6,55 @@ use std::path::PathBuf;
 
 pub type Id = i64;
 
+/// Stable catalog identity used by user authority and durable evidence.
+/// SQLite row IDs remain an implementation detail of the current projection.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "key", rename_all = "snake_case")]
+pub enum CatalogEntityKey {
+    Album(String),
+    Release(String),
+    Disc(String),
+    Track(String),
+    Asset(String),
+    RipFile(String),
+}
+
+impl CatalogEntityKey {
+    pub fn value(&self) -> &str {
+        match self {
+            Self::Album(value)
+            | Self::Release(value)
+            | Self::Disc(value)
+            | Self::Track(value)
+            | Self::Asset(value)
+            | Self::RipFile(value) => value,
+        }
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Album(_) => "Album",
+            Self::Release(_) => "Release",
+            Self::Disc(_) => "Disc",
+            Self::Track(_) => "Track",
+            Self::Asset(_) => "Asset",
+            Self::RipFile(_) => "RipFile",
+        }
+    }
+
+    pub fn from_parts(kind: &str, value: String) -> Option<Self> {
+        match kind.to_ascii_lowercase().as_str() {
+            "album" => Some(Self::Album(value)),
+            "release" => Some(Self::Release(value)),
+            "disc" => Some(Self::Disc(value)),
+            "track" => Some(Self::Track(value)),
+            "asset" => Some(Self::Asset(value)),
+            "ripfile" | "rip_file" => Some(Self::RipFile(value)),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Album {
     pub id: Id,
@@ -50,8 +99,6 @@ pub struct Disc {
     pub cddb_id: Option<String>,
     pub ar_discid1: Option<String>,
     pub ar_discid2: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dbar_raw: Option<Vec<u8>>,
     /// Media Catalog Number as encoded in the disc's subchannel Q data —
     /// a *physical-disc fact*, distinct from [`Release::barcode`] which
     /// reflects what metadata databases report. Usually equal; a
@@ -74,7 +121,6 @@ impl Default for Disc {
             cddb_id: None,
             ar_discid1: None,
             ar_discid2: None,
-            dbar_raw: None,
             mcn: None,
         }
     }
@@ -104,8 +150,14 @@ pub struct RipFile {
     pub size: Option<u64>,
     pub identification_confidence: IdentificationConfidence,
     pub identification_source: Option<IdentificationSource>,
+    /// Display-only summary derived by the repository from the latest
+    /// completed verification run. It is never written to `rip_files`.
     pub accuraterip_status: Option<String>,
+    /// Display-only timestamp derived from the latest completed verification
+    /// run. It is never written to `rip_files`.
     pub last_verified_at: Option<String>,
+    /// Display-only chosen shift from the latest completed verification run.
+    pub inferred_sample_shift: Option<i32>,
     /// Per-provider error log from the most recent identify attempt.
     /// Persisted so the GUI can explain *why* an unidentified rip didn't match
     /// without forcing the user to re-run identify just to read errors.
@@ -224,12 +276,17 @@ impl AssetType {
 pub struct Asset {
     pub id: Id,
     pub release_id: Id,
+    pub provider: String,
     pub asset_type: AssetType,
     pub group_id: Option<Id>,
     pub sequence: u16,
     pub source_url: Option<String>,
     pub file_path: Option<PathBuf>,
-    pub scraped_at: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub confidence: Option<String>,
+    pub mime_type: Option<String>,
+    pub acquired_at: Option<String>,
 }
 
 /// Pick the canonical front-cover from a release's assets.
@@ -256,6 +313,9 @@ pub struct Disagreement {
     pub id: Id,
     pub entity_type: String,
     pub entity_id: Id,
+    /// Durable authority target. `entity_id` is only the current projection
+    /// row and may change across future migrations.
+    pub entity_key: Option<CatalogEntityKey>,
     pub field: String,
     pub source_a: String,
     pub value_a: String,
@@ -287,6 +347,8 @@ pub struct Override {
     pub id: Id,
     pub entity_type: String,
     pub entity_id: Id,
+    /// Durable authority target. Filled by the repository when first saved.
+    pub entity_key: Option<CatalogEntityKey>,
     pub sub_path: Option<String>,
     pub field: String,
     pub override_value: String,

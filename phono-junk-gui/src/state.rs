@@ -10,8 +10,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, atomic::AtomicBool};
 
-use phono_junk_catalog::Id;
-use phono_junk_lib::{AlbumDetail, UnidentifiedDetail};
+use phono_junk_lib::{AlbumDetail, Id, UnidentifiedDetail};
 
 use crate::app::PhonoApp;
 
@@ -44,11 +43,8 @@ impl EntryKey {
 
 #[derive(Debug)]
 pub enum AppMessage {
-    /// A background operation that wasn't spawned via
-    /// [`crate::backend::worker::spawn_background_op`] announces itself so
-    /// the activity bar can render its progress. Used by the identify
-    /// queue's bursty lifecycle where the worker outlives any individual
-    /// burst — each burst gets its own op_id + activity-bar entry.
+    /// A background operation announces itself so the activity bar can
+    /// render its progress.
     OperationStarted {
         op_id: OperationId,
         description: String,
@@ -73,6 +69,8 @@ pub enum AppMessage {
     /// DB state changed in a way that the album list should observe.
     /// Triggers a `reload_rows` on the main thread.
     LibraryChanged,
+    /// Queue catalog-mutating identification on the current owned session.
+    QueueIdentification { rip_file_ids: Vec<Id> },
     /// Free-form status line for the toolbar — e.g. the summary of the
     /// most recent scan. Overwrites any previous status.
     Status(String),
@@ -193,6 +191,15 @@ pub fn handle_message(app: &mut PhonoApp, msg: AppMessage, ctx: &egui::Context) 
             // tracks, verify wrote new AR status, scan added rip files).
             // Drop it — the view rebuilds on next render.
             app.detail_cache = None;
+        }
+        AppMessage::QueueIdentification { rip_file_ids } => {
+            if let Some(session) = app.session.as_ref()
+                && let Err(error) = session
+                    .supervisor()
+                    .queue_identification(rip_file_ids, false)
+            {
+                app.load_error = Some(error.to_string());
+            }
         }
         AppMessage::Status(s) => {
             app.status_message = Some(s);

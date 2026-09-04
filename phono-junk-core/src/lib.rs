@@ -1,8 +1,9 @@
 //! Core types for phono-junk.
 //!
-//! No I/O. Types only — `Toc`, `DiscIds`, `AlbumIdentification`, `AudioError`,
-//! and the identification confidence/source enums consumed by every other
-//! crate in the workspace.
+//! No I/O. Types only — `Toc`, `DiscIds`, `AudioError`, and the
+//! identification confidence/source enums consumed by every other crate in
+//! the workspace. Provider observations and candidates live in
+//! `phono-junk-identify`; persisted projections live in `phono-junk-catalog`.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -189,7 +190,6 @@ pub enum IdentificationSource {
     MusicBrainz,
     Discogs,
     ITunes,
-    Amazon,
     Tower,
     UserTagged,
     Import,
@@ -199,64 +199,4 @@ pub enum IdentificationSource {
     Redumper,
     /// Another provider, named by the provider's `name()`.
     Other(String),
-}
-
-/// Builder-style identification output — the audio analog of retro-junk's
-/// `RomIdentification`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AlbumIdentification {
-    pub album_title: Option<String>,
-    pub album_artist: Option<String>,
-    pub year: Option<u16>,
-    pub mbid: Option<String>,
-    pub confidence: Option<IdentificationConfidence>,
-    pub sources: Vec<IdentificationSource>,
-    pub tracks: Vec<TrackIdentification>,
-}
-
-/// Per-track metadata that may or may not be populated.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TrackIdentification {
-    pub position: u8,
-    pub title: Option<String>,
-    pub artist: Option<String>,
-    pub length_frames: Option<u64>,
-    pub isrc: Option<String>,
-    pub mbid: Option<String>,
-}
-
-impl AlbumIdentification {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_title(mut self, title: impl Into<String>) -> Self {
-        self.album_title = Some(title.into());
-        self
-    }
-
-    pub fn with_artist(mut self, artist: impl Into<String>) -> Self {
-        self.album_artist = Some(artist.into());
-        self
-    }
-
-    pub fn with_year(mut self, year: u16) -> Self {
-        self.year = Some(year);
-        self
-    }
-
-    pub fn with_mbid(mut self, mbid: impl Into<String>) -> Self {
-        self.mbid = Some(mbid.into());
-        self
-    }
-
-    pub fn with_confidence(mut self, confidence: IdentificationConfidence) -> Self {
-        self.confidence = Some(confidence);
-        self
-    }
-
-    pub fn with_source(mut self, source: IdentificationSource) -> Self {
-        self.sources.push(source);
-        self
-    }
 }

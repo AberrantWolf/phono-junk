@@ -61,8 +61,10 @@ use std::path::Path;
 
 use egui::{Color32, Label, RichText, Ui};
 use egui_extras::{Column, TableBuilder};
-use phono_junk_catalog::{Asset, Disagreement, IdentifyAttemptError, RipperProvenance};
-use phono_junk_lib::{AlbumDetail, DiscDetail, ReleaseDetail, UnidentifiedDetail, audit};
+use phono_junk_lib::{
+    AlbumDetail, Asset, Disagreement, DiscDetail, IdentifyAttemptError, ReleaseDetail,
+    RipperProvenance, UnidentifiedDetail, audit,
+};
 
 use crate::app::PhonoApp;
 use crate::backend;
@@ -129,7 +131,7 @@ fn ensure_cache(app: &mut PhonoApp, focus: EntryKey) {
     if !needs_rebuild {
         return;
     }
-    let Some(conn) = app.db_conn.as_ref() else {
+    let Some(session) = app.session.as_ref() else {
         app.detail_cache = Some(DetailCache {
             key: focus,
             payload: DetailPayload::Error("no database open".into()),
@@ -140,19 +142,14 @@ fn ensure_cache(app: &mut PhonoApp, focus: EntryKey) {
         return;
     };
     let payload = match focus {
-        EntryKey::Album(album_id) => match phono_junk_lib::load_album_detail(conn, album_id) {
+        EntryKey::Album(album_id) => match session.album_detail(album_id) {
             Ok(d) => DetailPayload::Album(Box::new(d)),
             Err(e) => DetailPayload::Error(format!("load album {album_id}: {e}")),
         },
-        EntryKey::RipFile(rip_file_id) => {
-            match phono_junk_db::crud::get_rip_file(conn, rip_file_id) {
-                Ok(Some(rf)) => DetailPayload::Unidentified(Box::new(
-                    phono_junk_lib::load_unidentified_detail(rf),
-                )),
-                Ok(None) => DetailPayload::Error(format!("rip file {rip_file_id} vanished")),
-                Err(e) => DetailPayload::Error(format!("load rip {rip_file_id}: {e}")),
-            }
-        }
+        EntryKey::RipFile(rip_file_id) => match session.unidentified_detail(rip_file_id) {
+            Ok(detail) => DetailPayload::Unidentified(Box::new(detail)),
+            Err(e) => DetailPayload::Error(format!("load rip {rip_file_id}: {e}")),
+        },
     };
     app.detail_cache = Some(DetailCache {
         key: focus,
@@ -232,19 +229,8 @@ fn cover_block(ui: &mut Ui, app: &mut PhonoApp, key: EntryKey, cover_asset: Opti
         // detail payload renders; asset_cache_dir is resolved once at
         // startup), but fall through cleanly if the platform couldn't
         // resolve an OS cache dir.
-        if let (Some(db_path), Some(cache_dir)) = (app.db_path.clone(), app.asset_cache_dir.clone())
-        {
-            if let Some(cache) = app.detail_cache.as_mut() {
-                cache.art_loading = true;
-            }
-            backend::detail::spawn_cover_fetch(
-                app.phono_ctx.clone(),
-                app.message_tx.clone(),
-                key,
-                asset.clone(),
-                db_path,
-                cache_dir,
-            );
+        if let Some(cache_dir) = app.asset_cache_dir.clone() {
+            backend::detail::queue_cover_fetch(app, asset.clone(), cache_dir);
         }
     }
 
@@ -356,6 +342,15 @@ fn disc_block(ui: &mut Ui, app: &mut PhonoApp, disc: &DiscDetail, total_discs: u
             if let Some(status) = rf.accuraterip_status.as_deref() {
                 let when = rf.last_verified_at.as_deref().unwrap_or("?");
                 ui.label(format!("AccurateRip: {status}  ·  {when}"));
+                ui.label(format!(
+                    "Inferred sample shift: {}  ·  Ripper-reported read offset: {}",
+                    rf.inferred_sample_shift
+                        .map_or_else(|| "—".to_string(), |value| format!("{value:+}")),
+                    rf.provenance
+                        .as_ref()
+                        .and_then(|provenance| provenance.read_offset)
+                        .map_or_else(|| "—".to_string(), |value| format!("{value:+}")),
+                ));
             } else {
                 ui.label(RichText::new("AccurateRip: not yet verified").weak());
             }
@@ -828,7 +823,7 @@ fn render_unidentified(ui: &mut Ui, app: &mut PhonoApp, detail: &UnidentifiedDet
 
 fn toc_table(
     ui: &mut Ui,
-    toc: &phono_junk_core::Toc,
+    toc: &phono_junk_lib::Toc,
     sidecar: &phono_junk_lib::sidecar::SidecarData,
 ) {
     let any_title = !sidecar.cdtext_titles.is_empty();

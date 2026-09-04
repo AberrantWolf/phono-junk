@@ -14,12 +14,14 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use junk_libs_disc::redumper::{DriveInfo, Ripper};
 use phono_junk_catalog::{
-    Album, Asset, AssetType, Disagreement, Disc, Id, IdentifyAttemptError, LibraryFolder, Override,
-    Release, RipFile, RipperProvenance, Track,
+    Album, Asset, AssetType, CatalogEntityKey, Disagreement, Disc, Id, IdentifyAttemptError,
+    LibraryFolder, Override, Release, RipFile, RipperProvenance, Track,
 };
 use phono_junk_core::{IdentificationConfidence, IdentificationSource, IdentificationState, Toc};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Serialize, de::DeserializeOwned};
+use url::Url;
+use uuid::Uuid;
 
 use crate::DbError;
 
@@ -87,11 +89,117 @@ fn opt_path_to_string(p: &Option<PathBuf>) -> Result<Option<String>, DbError> {
     p.as_deref().map(path_to_string).transpose()
 }
 
+fn fresh_key(kind: &str) -> String {
+    format!("{kind}:local:{}", Uuid::new_v4())
+}
+
+fn normalize_source_url(source_url: &str) -> String {
+    let Ok(mut url) = Url::parse(source_url) else {
+        return source_url.to_string();
+    };
+    url.set_fragment(None);
+    if url.path().is_empty() {
+        url.set_path("/");
+    }
+    url.to_string()
+}
+
+fn entity_table(entity_type: &str) -> Result<&'static str, DbError> {
+    match entity_type.to_ascii_lowercase().as_str() {
+        "album" => Ok("albums"),
+        "release" => Ok("releases"),
+        "disc" => Ok("discs"),
+        "track" => Ok("tracks"),
+        "asset" => Ok("assets"),
+        "ripfile" | "rip_file" => Ok("rip_files"),
+        other => Err(DbError::Migration(format!(
+            "unsupported stable-key entity type: {other}"
+        ))),
+    }
+}
+
+fn assign_entity_key(
+    conn: &Connection,
+    entity_type: &str,
+    row_id: Id,
+    preferred: Option<String>,
+) -> Result<String, DbError> {
+    let table = entity_table(entity_type)?;
+    let existing: Option<String> = conn
+        .query_row(
+            &format!("SELECT stable_key FROM {table} WHERE id = ?1"),
+            [row_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(existing) = existing {
+        return Ok(existing);
+    }
+
+    let key = preferred.unwrap_or_else(|| fresh_key(&entity_type.to_ascii_lowercase()));
+    let updated = conn.execute(
+        &format!("UPDATE {table} SET stable_key = ?1 WHERE id = ?2"),
+        params![key, row_id],
+    )?;
+    if updated == 0 {
+        return Err(DbError::Migration(format!(
+            "cannot assign a stable key to missing {entity_type} row {row_id}"
+        )));
+    }
+    Ok(key)
+}
+
+pub fn catalog_entity_key(
+    conn: &Connection,
+    entity_type: &str,
+    row_id: Id,
+) -> Result<String, DbError> {
+    assign_entity_key(conn, entity_type, row_id, None)
+}
+
+fn authority_key(
+    conn: &Connection,
+    entity_type: &str,
+    row_id: Id,
+    explicit: Option<&CatalogEntityKey>,
+) -> Result<String, DbError> {
+    if let Some(explicit) = explicit {
+        if !explicit.kind().eq_ignore_ascii_case(entity_type) {
+            return Err(DbError::Migration(format!(
+                "authority key kind {} does not match entity type {entity_type}",
+                explicit.kind()
+            )));
+        }
+        return Ok(explicit.value().to_string());
+    }
+    catalog_entity_key(conn, entity_type, row_id)
+}
+
+pub fn set_catalog_entity_key(
+    conn: &Connection,
+    entity_type: &str,
+    row_id: Id,
+    key: &str,
+) -> Result<(), DbError> {
+    let table = entity_table(entity_type)?;
+    let updated = conn.execute(
+        &format!("UPDATE {table} SET stable_key = ?1 WHERE id = ?2"),
+        params![key, row_id],
+    )?;
+    if updated == 0 {
+        return Err(DbError::Migration(format!(
+            "cannot set a stable key on missing {entity_type} row {row_id}"
+        )));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Album
 // ---------------------------------------------------------------------------
 
-fn row_to_album(row: &Row) -> rusqlite::Result<Album> {
+pub(crate) fn row_to_album(row: &Row) -> rusqlite::Result<Album> {
     let secondary_types_json: Option<String> = row.get("secondary_types_json")?;
     let secondary_types: Vec<String> = secondary_types_json
         .as_deref()
@@ -135,7 +243,13 @@ pub fn insert_album(conn: &Connection, album: &Album) -> Result<Id, DbError> {
             album.first_release_date,
         ],
     )?;
-    Ok(conn.last_insert_rowid())
+    let id = conn.last_insert_rowid();
+    let preferred = album
+        .mbid
+        .as_ref()
+        .map(|mbid| format!("album:musicbrainz-release-group:{mbid}"));
+    assign_entity_key(conn, "album", id, preferred)?;
+    Ok(id)
 }
 
 pub fn get_album(conn: &Connection, id: Id) -> Result<Option<Album>, DbError> {
@@ -198,7 +312,7 @@ pub fn list_albums(conn: &Connection) -> Result<Vec<Album>, DbError> {
 const RELEASE_COLS: &str =
     "id, album_id, country, date, label, catalog_number, barcode, mbid, status, language, script";
 
-fn row_to_release(row: &Row) -> rusqlite::Result<Release> {
+pub(crate) fn row_to_release(row: &Row) -> rusqlite::Result<Release> {
     Ok(Release {
         id: row.get("id")?,
         album_id: row.get("album_id")?,
@@ -232,12 +346,28 @@ pub fn insert_release(conn: &Connection, release: &Release) -> Result<Id, DbErro
             release.script,
         ],
     )?;
-    Ok(conn.last_insert_rowid())
+    let id = conn.last_insert_rowid();
+    let preferred = release
+        .mbid
+        .as_ref()
+        .map(|mbid| format!("release:musicbrainz:{mbid}"));
+    assign_entity_key(conn, "release", id, preferred)?;
+    Ok(id)
 }
 
 pub fn get_release(conn: &Connection, id: Id) -> Result<Option<Release>, DbError> {
     let sql = format!("SELECT {RELEASE_COLS} FROM releases WHERE id = ?1");
     Ok(conn.query_row(&sql, [id], row_to_release).optional()?)
+}
+
+pub fn find_release_by_stable_key(
+    conn: &Connection,
+    stable_key: &str,
+) -> Result<Option<Release>, DbError> {
+    let sql = format!("SELECT {RELEASE_COLS} FROM releases WHERE stable_key = ?1");
+    Ok(conn
+        .query_row(&sql, [stable_key], row_to_release)
+        .optional()?)
 }
 
 pub fn update_release(conn: &Connection, release: &Release) -> Result<(), DbError> {
@@ -280,9 +410,9 @@ pub fn list_releases_for_album(conn: &Connection, album_id: Id) -> Result<Vec<Re
 // ---------------------------------------------------------------------------
 
 const DISC_COLS: &str = "id, release_id, disc_number, format, toc_json, \
-     mb_discid, cddb_id, ar_discid1, ar_discid2, dbar_raw, mcn";
+     mb_discid, cddb_id, ar_discid1, ar_discid2, mcn";
 
-fn row_to_disc(row: &Row) -> rusqlite::Result<Disc> {
+pub(crate) fn row_to_disc(row: &Row) -> rusqlite::Result<Disc> {
     let toc_json: Option<String> = row.get("toc_json")?;
     let toc: Option<Toc> = toc_json
         .as_deref()
@@ -302,7 +432,6 @@ fn row_to_disc(row: &Row) -> rusqlite::Result<Disc> {
         cddb_id: row.get("cddb_id")?,
         ar_discid1: row.get("ar_discid1")?,
         ar_discid2: row.get("ar_discid2")?,
-        dbar_raw: row.get("dbar_raw")?,
         mcn: row.get("mcn")?,
     })
 }
@@ -311,8 +440,8 @@ pub fn insert_disc(conn: &Connection, disc: &Disc) -> Result<Id, DbError> {
     let toc_json = disc.toc.as_ref().map(json_write).transpose()?;
     conn.execute(
         "INSERT INTO discs (release_id, disc_number, format, toc_json,
-                            mb_discid, cddb_id, ar_discid1, ar_discid2, dbar_raw, mcn)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                            mb_discid, cddb_id, ar_discid1, ar_discid2, mcn)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             disc.release_id,
             disc.disc_number as i64,
@@ -322,11 +451,23 @@ pub fn insert_disc(conn: &Connection, disc: &Disc) -> Result<Id, DbError> {
             disc.cddb_id,
             disc.ar_discid1,
             disc.ar_discid2,
-            disc.dbar_raw,
             disc.mcn,
         ],
     )?;
-    Ok(conn.last_insert_rowid())
+    let id = conn.last_insert_rowid();
+    let preferred = match (
+        disc.ar_discid1.as_deref(),
+        disc.ar_discid2.as_deref(),
+        disc.cddb_id.as_deref(),
+    ) {
+        (Some(id1), Some(id2), Some(cddb)) => Some(format!("disc:accuraterip:{id1}:{id2}:{cddb}")),
+        _ => disc
+            .mb_discid
+            .as_ref()
+            .map(|mbid| format!("disc:musicbrainz:{mbid}")),
+    };
+    assign_entity_key(conn, "disc", id, preferred)?;
+    Ok(id)
 }
 
 pub fn get_disc(conn: &Connection, id: Id) -> Result<Option<Disc>, DbError> {
@@ -339,8 +480,8 @@ pub fn update_disc(conn: &Connection, disc: &Disc) -> Result<(), DbError> {
     conn.execute(
         "UPDATE discs SET release_id = ?1, disc_number = ?2, format = ?3, toc_json = ?4,
                           mb_discid = ?5, cddb_id = ?6, ar_discid1 = ?7, ar_discid2 = ?8,
-                          dbar_raw = ?9, mcn = ?10
-         WHERE id = ?11",
+                          mcn = ?9
+         WHERE id = ?10",
         params![
             disc.release_id,
             disc.disc_number as i64,
@@ -350,7 +491,6 @@ pub fn update_disc(conn: &Connection, disc: &Disc) -> Result<(), DbError> {
             disc.cddb_id,
             disc.ar_discid1,
             disc.ar_discid2,
-            disc.dbar_raw,
             disc.mcn,
             disc.id,
         ],
@@ -392,33 +532,11 @@ pub fn find_disc_by_ar_triple(
         .optional()?)
 }
 
-/// Targeted dBAR persistence: writes raw bytes without re-serializing the
-/// whole disc row. Called from the AccurateRip verify path on first fetch so
-/// subsequent verifications can skip the network.
-pub fn set_disc_dbar_raw(conn: &Connection, disc_id: Id, bytes: &[u8]) -> Result<(), DbError> {
-    conn.execute(
-        "UPDATE discs SET dbar_raw = ?1 WHERE id = ?2",
-        params![bytes, disc_id],
-    )?;
-    Ok(())
-}
-
-pub fn get_disc_dbar_raw(conn: &Connection, disc_id: Id) -> Result<Option<Vec<u8>>, DbError> {
-    Ok(conn
-        .query_row(
-            "SELECT dbar_raw FROM discs WHERE id = ?1",
-            [disc_id],
-            |row| row.get::<_, Option<Vec<u8>>>(0),
-        )
-        .optional()?
-        .flatten())
-}
-
 // ---------------------------------------------------------------------------
 // Track
 // ---------------------------------------------------------------------------
 
-fn row_to_track(row: &Row) -> rusqlite::Result<Track> {
+pub(crate) fn row_to_track(row: &Row) -> rusqlite::Result<Track> {
     let position: i64 = row.get("position")?;
     Ok(Track {
         id: row.get("id")?,
@@ -451,7 +569,15 @@ pub fn insert_track(conn: &Connection, track: &Track) -> Result<Id, DbError> {
             track.recording_mbid,
         ],
     )?;
-    Ok(conn.last_insert_rowid())
+    let id = conn.last_insert_rowid();
+    let disc_key = catalog_entity_key(conn, "disc", track.disc_id)?;
+    assign_entity_key(
+        conn,
+        "track",
+        id,
+        Some(format!("track:{disc_key}:{}", track.position)),
+    )?;
+    Ok(id)
 }
 
 pub fn get_track(conn: &Connection, id: Id) -> Result<Option<Track>, DbError> {
@@ -508,12 +634,18 @@ pub fn list_tracks_for_disc(conn: &Connection, disc_id: Id) -> Result<Vec<Track>
 /// Single source of truth for the rip_files SELECT column list — keeps the
 /// five callers (get/find_by_cue/find_by_chd/find_for_disc/list_unidentified)
 /// from drifting when fields are added.
-const RIP_FILE_COLUMNS: &str = "id, disc_id, cue_path, chd_path, bin_paths_json, mtime, size, \
-     identification_confidence, identification_source, accuraterip_status, \
-     last_verified_at, last_identify_errors, last_identify_at, \
+pub(crate) const RIP_FILE_COLUMNS: &str = "id, disc_id, cue_path, chd_path, bin_paths_json, mtime, size, \
+     identification_confidence, identification_source, \
+     (SELECT vr.status FROM verification_runs vr WHERE vr.rip_file_id = rip_files.id \
+      AND vr.finished_at IS NOT NULL ORDER BY vr.id DESC LIMIT 1) AS accuraterip_status, \
+     (SELECT vr.finished_at FROM verification_runs vr WHERE vr.rip_file_id = rip_files.id \
+      AND vr.finished_at IS NOT NULL ORDER BY vr.id DESC LIMIT 1) AS last_verified_at, \
+     (SELECT vr.chosen_sample_shift FROM verification_runs vr WHERE vr.rip_file_id = rip_files.id \
+      AND vr.finished_at IS NOT NULL ORDER BY vr.id DESC LIMIT 1) AS inferred_sample_shift, \
+     last_identify_errors, last_identify_at, \
      identification_state, last_state_change_at";
 
-fn row_to_rip_file(row: &Row) -> rusqlite::Result<RipFile> {
+pub(crate) fn row_to_rip_file(row: &Row) -> rusqlite::Result<RipFile> {
     let bin_paths_json: String = row.get("bin_paths_json")?;
     let bin_paths: Vec<PathBuf> = serde_json::from_str(&bin_paths_json).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
@@ -575,6 +707,7 @@ fn row_to_rip_file(row: &Row) -> rusqlite::Result<RipFile> {
         identification_source,
         accuraterip_status: row.get("accuraterip_status")?,
         last_verified_at: row.get("last_verified_at")?,
+        inferred_sample_shift: row.get("inferred_sample_shift")?,
         last_identify_errors,
         last_identify_at: row.get("last_identify_at")?,
         identification_state,
@@ -585,7 +718,7 @@ fn row_to_rip_file(row: &Row) -> rusqlite::Result<RipFile> {
     })
 }
 
-fn row_to_provenance(row: &Row) -> rusqlite::Result<RipperProvenance> {
+pub(crate) fn row_to_provenance(row: &Row) -> rusqlite::Result<RipperProvenance> {
     let ripper_str: String = row.get("ripper")?;
     let drive_json: Option<String> = row.get("drive_json")?;
     let drive: Option<DriveInfo> = drive_json
@@ -700,11 +833,10 @@ pub fn insert_rip_file(conn: &Connection, file: &RipFile) -> Result<Id, DbError>
     conn.execute(
         "INSERT INTO rip_files (disc_id, cue_path, chd_path, bin_paths_json,
                                 mtime, size, identification_confidence,
-                                identification_source, accuraterip_status,
-                                last_verified_at, last_identify_errors,
+                                identification_source, last_identify_errors,
                                 last_identify_at, identification_state,
                                 last_state_change_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             file.disc_id,
             cue,
@@ -714,8 +846,6 @@ pub fn insert_rip_file(conn: &Connection, file: &RipFile) -> Result<Id, DbError>
             file.size.map(|v| v as i64),
             confidence_to_str(file.identification_confidence),
             source,
-            file.accuraterip_status,
-            file.last_verified_at,
             errors_json,
             file.last_identify_at,
             file.identification_state.as_str(),
@@ -723,6 +853,7 @@ pub fn insert_rip_file(conn: &Connection, file: &RipFile) -> Result<Id, DbError>
         ],
     )?;
     let id = conn.last_insert_rowid();
+    assign_entity_key(conn, "rip_file", id, None)?;
     if let Some(prov) = &file.provenance {
         upsert_rip_file_provenance(conn, id, prov)?;
     }
@@ -762,10 +893,9 @@ pub fn update_rip_file(conn: &Connection, file: &RipFile) -> Result<(), DbError>
         "UPDATE rip_files SET disc_id = ?1, cue_path = ?2, chd_path = ?3,
                               bin_paths_json = ?4, mtime = ?5, size = ?6,
                               identification_confidence = ?7, identification_source = ?8,
-                              accuraterip_status = ?9, last_verified_at = ?10,
-                              last_identify_errors = ?11, last_identify_at = ?12,
-                              identification_state = ?13, last_state_change_at = ?14
-         WHERE id = ?15",
+                              last_identify_errors = ?9, last_identify_at = ?10,
+                              identification_state = ?11, last_state_change_at = ?12
+         WHERE id = ?13",
         params![
             file.disc_id,
             cue,
@@ -775,8 +905,6 @@ pub fn update_rip_file(conn: &Connection, file: &RipFile) -> Result<(), DbError>
             file.size.map(|v| v as i64),
             confidence_to_str(file.identification_confidence),
             source,
-            file.accuraterip_status,
-            file.last_verified_at,
             errors_json,
             file.last_identify_at,
             file.identification_state.as_str(),
@@ -911,8 +1039,8 @@ pub fn list_rip_files_by_state(
 
 /// Targeted state transition: writes `identification_state` +
 /// `last_state_change_at` without touching any other column. Mirrors the
-/// `set_disc_dbar_raw` / `set_rip_file_identify_attempt` pattern — avoids
-/// re-serialising the whole row for a simple lifecycle tick. Sprint 26.
+/// `set_rip_file_identify_attempt` pattern — avoids
+/// re-serialising the whole row for a simple lifecycle tick.
 pub fn set_rip_file_identification_state(
     conn: &Connection,
     rip_file_id: Id,
@@ -952,12 +1080,13 @@ pub fn set_rip_file_identify_attempt(
 // Asset
 // ---------------------------------------------------------------------------
 
-fn row_to_asset(row: &Row) -> rusqlite::Result<Asset> {
+pub(crate) fn row_to_asset(row: &Row) -> rusqlite::Result<Asset> {
     let asset_type_str: String = row.get("asset_type")?;
     let sequence: i64 = row.get("sequence")?;
     Ok(Asset {
         id: row.get("id")?,
         release_id: row.get("release_id")?,
+        provider: row.get("provider")?,
         asset_type: AssetType::from_db_str(&asset_type_str),
         group_id: row.get("group_id")?,
         sequence: sequence as u16,
@@ -965,34 +1094,108 @@ fn row_to_asset(row: &Row) -> rusqlite::Result<Asset> {
         file_path: row
             .get::<_, Option<String>>("file_path")?
             .map(PathBuf::from),
-        scraped_at: row.get("scraped_at")?,
+        width: row
+            .get::<_, Option<i64>>("width")?
+            .map(|value| value as u32),
+        height: row
+            .get::<_, Option<i64>>("height")?
+            .map(|value| value as u32),
+        confidence: row.get("confidence")?,
+        mime_type: row.get("mime_type")?,
+        acquired_at: row.get("acquired_at")?,
     })
 }
 
 pub fn insert_asset(conn: &Connection, asset: &Asset) -> Result<Id, DbError> {
     let file_path = opt_path_to_string(&asset.file_path)?;
     conn.execute(
-        "INSERT INTO assets (release_id, asset_type, group_id, sequence,
-                             source_url, file_path, scraped_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO assets (release_id, provider, asset_type, group_id, sequence,
+                             source_url, file_path, width, height, confidence,
+                             mime_type, acquired_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             asset.release_id,
+            asset.provider,
             asset.asset_type.as_db_str(),
             asset.group_id,
             asset.sequence as i64,
             asset.source_url,
             file_path,
-            asset.scraped_at,
+            asset.width.map(i64::from),
+            asset.height.map(i64::from),
+            asset.confidence,
+            asset.mime_type,
+            asset.acquired_at,
         ],
     )?;
-    Ok(conn.last_insert_rowid())
+    let id = conn.last_insert_rowid();
+    let preferred = asset.source_url.as_ref().map(|url| {
+        format!(
+            "asset:unknown:{}:{}",
+            asset.asset_type.as_db_str(),
+            normalize_source_url(url)
+        )
+    });
+    assign_entity_key(conn, "asset", id, preferred)?;
+    Ok(id)
+}
+
+/// Upsert an asset observation without replacing its stable projection row.
+/// Provider provenance and image facts are storage inputs so this crate does
+/// not depend on provider traits.
+#[allow(clippy::too_many_arguments)]
+pub fn upsert_asset_evidence(
+    conn: &Connection,
+    release_id: Id,
+    provider: &str,
+    asset_type: &AssetType,
+    source_url: &str,
+    width: Option<u32>,
+    height: Option<u32>,
+    confidence: &str,
+    mime_type: Option<&str>,
+    acquired_at: &str,
+) -> Result<Id, DbError> {
+    let source_url = normalize_source_url(source_url);
+    let stable_key = format!("asset:{provider}:{}:{source_url}", asset_type.as_db_str());
+    conn.execute(
+        "INSERT INTO assets
+            (stable_key, release_id, provider, asset_type, source_url, width,
+             height, confidence, mime_type, acquired_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(stable_key) DO UPDATE SET
+             release_id = excluded.release_id,
+             width = COALESCE(excluded.width, assets.width),
+             height = COALESCE(excluded.height, assets.height),
+             confidence = excluded.confidence,
+             mime_type = COALESCE(excluded.mime_type, assets.mime_type),
+             acquired_at = excluded.acquired_at",
+        params![
+            stable_key,
+            release_id,
+            provider,
+            asset_type.as_db_str(),
+            source_url,
+            width.map(i64::from),
+            height.map(i64::from),
+            confidence,
+            mime_type,
+            acquired_at
+        ],
+    )?;
+    conn.query_row(
+        "SELECT id FROM assets WHERE stable_key = ?1",
+        [stable_key],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
 }
 
 pub fn get_asset(conn: &Connection, id: Id) -> Result<Option<Asset>, DbError> {
     Ok(conn
         .query_row(
-            "SELECT id, release_id, asset_type, group_id, sequence,
-                    source_url, file_path, scraped_at
+            "SELECT id, release_id, provider, asset_type, group_id, sequence,
+                    source_url, file_path, width, height, confidence, mime_type, acquired_at
              FROM assets WHERE id = ?1",
             [id],
             row_to_asset,
@@ -1003,17 +1206,23 @@ pub fn get_asset(conn: &Connection, id: Id) -> Result<Option<Asset>, DbError> {
 pub fn update_asset(conn: &Connection, asset: &Asset) -> Result<(), DbError> {
     let file_path = opt_path_to_string(&asset.file_path)?;
     conn.execute(
-        "UPDATE assets SET release_id = ?1, asset_type = ?2, group_id = ?3,
-                           sequence = ?4, source_url = ?5, file_path = ?6, scraped_at = ?7
-         WHERE id = ?8",
+        "UPDATE assets SET release_id = ?1, provider = ?2, asset_type = ?3, group_id = ?4,
+                           sequence = ?5, source_url = ?6, file_path = ?7, width = ?8,
+                           height = ?9, confidence = ?10, mime_type = ?11, acquired_at = ?12
+         WHERE id = ?13",
         params![
             asset.release_id,
+            asset.provider,
             asset.asset_type.as_db_str(),
             asset.group_id,
             asset.sequence as i64,
             asset.source_url,
             file_path,
-            asset.scraped_at,
+            asset.width.map(i64::from),
+            asset.height.map(i64::from),
+            asset.confidence,
+            asset.mime_type,
+            asset.acquired_at,
             asset.id,
         ],
     )?;
@@ -1027,8 +1236,8 @@ pub fn delete_asset(conn: &Connection, id: Id) -> Result<(), DbError> {
 
 pub fn list_assets_for_release(conn: &Connection, release_id: Id) -> Result<Vec<Asset>, DbError> {
     let mut stmt = conn.prepare(
-        "SELECT id, release_id, asset_type, group_id, sequence,
-                source_url, file_path, scraped_at
+        "SELECT id, release_id, provider, asset_type, group_id, sequence,
+                source_url, file_path, width, height, confidence, mime_type, acquired_at
          FROM assets
          WHERE release_id = ?1
          ORDER BY COALESCE(group_id, -1), sequence, id",
@@ -1041,12 +1250,16 @@ pub fn list_assets_for_release(conn: &Connection, release_id: Id) -> Result<Vec<
 // Disagreement
 // ---------------------------------------------------------------------------
 
-fn row_to_disagreement(row: &Row) -> rusqlite::Result<Disagreement> {
+pub(crate) fn row_to_disagreement(row: &Row) -> rusqlite::Result<Disagreement> {
     let resolved: i64 = row.get("resolved")?;
+    let entity_type: String = row.get("entity_type")?;
+    let entity_key = CatalogEntityKey::from_parts(&entity_type, row.get("entity_key")?)
+        .ok_or_else(|| rusqlite::Error::InvalidColumnName("entity_type".into()))?;
     Ok(Disagreement {
         id: row.get("id")?,
-        entity_type: row.get("entity_type")?,
+        entity_type,
         entity_id: row.get("entity_id")?,
+        entity_key: Some(entity_key),
         field: row.get("field")?,
         source_a: row.get("source_a")?,
         value_a: row.get("value_a")?,
@@ -1058,13 +1271,15 @@ fn row_to_disagreement(row: &Row) -> rusqlite::Result<Disagreement> {
 }
 
 pub fn insert_disagreement(conn: &Connection, d: &Disagreement) -> Result<Id, DbError> {
+    let entity_key = authority_key(conn, &d.entity_type, d.entity_id, d.entity_key.as_ref())?;
     conn.execute(
-        "INSERT INTO disagreements (entity_type, entity_id, field,
+        "INSERT INTO disagreements (entity_type, entity_id, entity_key, field,
                                     source_a, value_a, source_b, value_b, resolved)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             d.entity_type,
             d.entity_id,
+            entity_key,
             d.field,
             d.source_a,
             d.value_a,
@@ -1079,7 +1294,7 @@ pub fn insert_disagreement(conn: &Connection, d: &Disagreement) -> Result<Id, Db
 pub fn get_disagreement(conn: &Connection, id: Id) -> Result<Option<Disagreement>, DbError> {
     Ok(conn
         .query_row(
-            "SELECT id, entity_type, entity_id, field, source_a, value_a,
+            "SELECT id, entity_type, entity_id, entity_key, field, source_a, value_a,
                     source_b, value_b, resolved, created_at
              FROM disagreements WHERE id = ?1",
             [id],
@@ -1089,14 +1304,16 @@ pub fn get_disagreement(conn: &Connection, id: Id) -> Result<Option<Disagreement
 }
 
 pub fn update_disagreement(conn: &Connection, d: &Disagreement) -> Result<(), DbError> {
+    let entity_key = authority_key(conn, &d.entity_type, d.entity_id, d.entity_key.as_ref())?;
     conn.execute(
-        "UPDATE disagreements SET entity_type = ?1, entity_id = ?2, field = ?3,
-                                  source_a = ?4, value_a = ?5, source_b = ?6, value_b = ?7,
-                                  resolved = ?8
-         WHERE id = ?9",
+        "UPDATE disagreements SET entity_type = ?1, entity_id = ?2, entity_key = ?3, field = ?4,
+                                  source_a = ?5, value_a = ?6, source_b = ?7, value_b = ?8,
+                                  resolved = ?9
+         WHERE id = ?10",
         params![
             d.entity_type,
             d.entity_id,
+            entity_key,
             d.field,
             d.source_a,
             d.value_a,
@@ -1119,14 +1336,15 @@ pub fn list_disagreements_for(
     entity_type: &str,
     entity_id: Id,
 ) -> Result<Vec<Disagreement>, DbError> {
+    let entity_key = catalog_entity_key(conn, entity_type, entity_id)?;
     let mut stmt = conn.prepare(
-        "SELECT id, entity_type, entity_id, field, source_a, value_a,
+        "SELECT id, entity_type, entity_id, entity_key, field, source_a, value_a,
                 source_b, value_b, resolved, created_at
          FROM disagreements
-         WHERE entity_type = ?1 AND entity_id = ?2
+         WHERE entity_key = ?1
          ORDER BY id",
     )?;
-    let rows = stmt.query_map(params![entity_type, entity_id], row_to_disagreement)?;
+    let rows = stmt.query_map([entity_key], row_to_disagreement)?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
@@ -1135,10 +1353,14 @@ pub fn list_disagreements_for(
 // ---------------------------------------------------------------------------
 
 fn row_to_override(row: &Row) -> rusqlite::Result<Override> {
+    let entity_type: String = row.get("entity_type")?;
+    let entity_key = CatalogEntityKey::from_parts(&entity_type, row.get("entity_key")?)
+        .ok_or_else(|| rusqlite::Error::InvalidColumnName("entity_type".into()))?;
     Ok(Override {
         id: row.get("id")?,
-        entity_type: row.get("entity_type")?,
+        entity_type,
         entity_id: row.get("entity_id")?,
+        entity_key: Some(entity_key),
         sub_path: row.get("sub_path")?,
         field: row.get("field")?,
         override_value: row.get("override_value")?,
@@ -1148,13 +1370,15 @@ fn row_to_override(row: &Row) -> rusqlite::Result<Override> {
 }
 
 pub fn insert_override(conn: &Connection, o: &Override) -> Result<Id, DbError> {
+    let entity_key = authority_key(conn, &o.entity_type, o.entity_id, o.entity_key.as_ref())?;
     conn.execute(
-        "INSERT INTO overrides (entity_type, entity_id, sub_path, field,
+        "INSERT INTO overrides (entity_type, entity_id, entity_key, sub_path, field,
                                 override_value, reason)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             o.entity_type,
             o.entity_id,
+            entity_key,
             o.sub_path,
             o.field,
             o.override_value,
@@ -1167,7 +1391,7 @@ pub fn insert_override(conn: &Connection, o: &Override) -> Result<Id, DbError> {
 pub fn get_override(conn: &Connection, id: Id) -> Result<Option<Override>, DbError> {
     Ok(conn
         .query_row(
-            "SELECT id, entity_type, entity_id, sub_path, field,
+            "SELECT id, entity_type, entity_id, entity_key, sub_path, field,
                     override_value, reason, created_at
              FROM overrides WHERE id = ?1",
             [id],
@@ -1177,13 +1401,15 @@ pub fn get_override(conn: &Connection, id: Id) -> Result<Option<Override>, DbErr
 }
 
 pub fn update_override(conn: &Connection, o: &Override) -> Result<(), DbError> {
+    let entity_key = authority_key(conn, &o.entity_type, o.entity_id, o.entity_key.as_ref())?;
     conn.execute(
-        "UPDATE overrides SET entity_type = ?1, entity_id = ?2, sub_path = ?3,
-                              field = ?4, override_value = ?5, reason = ?6
-         WHERE id = ?7",
+        "UPDATE overrides SET entity_type = ?1, entity_id = ?2, entity_key = ?3, sub_path = ?4,
+                              field = ?5, override_value = ?6, reason = ?7
+         WHERE id = ?8",
         params![
             o.entity_type,
             o.entity_id,
+            entity_key,
             o.sub_path,
             o.field,
             o.override_value,
@@ -1204,14 +1430,15 @@ pub fn list_overrides_for(
     entity_type: &str,
     entity_id: Id,
 ) -> Result<Vec<Override>, DbError> {
+    let entity_key = catalog_entity_key(conn, entity_type, entity_id)?;
     let mut stmt = conn.prepare(
-        "SELECT id, entity_type, entity_id, sub_path, field,
+        "SELECT id, entity_type, entity_id, entity_key, sub_path, field,
                 override_value, reason, created_at
          FROM overrides
-         WHERE entity_type = ?1 AND entity_id = ?2
+         WHERE entity_key = ?1
          ORDER BY id",
     )?;
-    let rows = stmt.query_map(params![entity_type, entity_id], row_to_override)?;
+    let rows = stmt.query_map([entity_key], row_to_override)?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 

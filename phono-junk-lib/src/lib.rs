@@ -17,6 +17,7 @@ pub mod http;
 pub mod identify;
 pub mod list;
 pub mod scan;
+pub mod session;
 pub mod sidecar;
 pub mod verify;
 
@@ -34,5 +35,18 @@ pub use list::{
     ListEntry, ListFilters, ListRow, UnidentifiedRow, YearSpec, filter_entries, filter_rows,
     load_list_entries, load_list_rows,
 };
-pub use scan::{IngestOutcome, ScanError, ScanEvent, ScanKind, ScanOpts, ScanSummary, ingest_path};
+pub use phono_junk_catalog::{
+    Asset, Disagreement, Id, IdentifyAttemptError, RipFile, RipperProvenance,
+};
+pub use phono_junk_core::{IdentificationConfidence, IdentificationState, Toc};
+pub use phono_junk_db::CURRENT_VERSION as CATALOG_SCHEMA_VERSION;
+pub use phono_junk_identify::HttpError;
+pub use scan::{
+    IdentificationDisposition, IngestOutcome, RefreshPolicy, ScanError, ScanEvent, ScanKind,
+    ScanRequest, ScanSummary, ingest_path,
+};
+pub use session::{
+    AlbumSummary, JobEvent, JobEventKind, JobId, JobSupervisor, LibrarySession, SessionError,
+    SessionGeneration,
+};
 pub use verify::{VerifiedTrack, VerifyError, VerifySummary, VerifyTarget};

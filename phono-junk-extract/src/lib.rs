@@ -13,14 +13,14 @@
 //! `TITLE`, `TRACKNUMBER`, `TOTALTRACKS`, `DISCNUMBER`, `TOTALDISCS`,
 //! `DATE`, `GENRE`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_RELEASETRACKID`,
 //! `ISRC`. Front cover embedded as `METADATA_BLOCK_PICTURE` (picture
-//! type 3, `image/jpeg`).
+//! type 3, with the MIME type detected from the artwork bytes).
 
 pub mod encode;
 pub mod error;
 pub mod paths;
 pub mod tags;
 
-pub use encode::encode_flac_track;
+pub use encode::{EmbeddedPicture, encode_flac_track};
 pub use error::ExtractError;
 pub use paths::{
     album_artist_component, album_folder_name, plan_disc_directory, plan_output_paths,

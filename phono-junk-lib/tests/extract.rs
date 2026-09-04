@@ -97,7 +97,6 @@ fn sample_disc(release_id: i64, toc: Toc) -> Disc {
         cddb_id: Some("12345678".into()),
         ar_discid1: Some("00000001".into()),
         ar_discid2: Some("00000002".into()),
-        dbar_raw: None,
         mcn: None,
     }
 }
@@ -129,6 +128,7 @@ fn sample_rip_file(disc_id: i64, cue: &Path, bin: &Path) -> RipFile {
         identification_source: Some(IdentificationSource::MusicBrainz),
         accuraterip_status: None,
         last_verified_at: None,
+        inferred_sample_shift: None,
         last_identify_errors: None,
         last_identify_at: None,
         provenance: None,
@@ -165,12 +165,17 @@ fn seed_cover(conn: &Connection, release_id: i64, cache_dir: &Path) -> Vec<u8> {
     let asset = Asset {
         id: 0,
         release_id,
+        provider: "test".into(),
         asset_type: AssetType::FrontCover,
         group_id: None,
         sequence: 0,
         source_url: Some("https://example.test/cover.jpg".into()),
         file_path: Some(abs),
-        scraped_at: None,
+        width: None,
+        height: None,
+        confidence: None,
+        mime_type: None,
+        acquired_at: None,
     };
     crud::insert_asset(conn, &asset).unwrap();
     cover

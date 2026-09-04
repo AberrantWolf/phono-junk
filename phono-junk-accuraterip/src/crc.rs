@@ -32,7 +32,7 @@ use phono_junk_core::AudioError;
 /// Where this track sits on the disc — selects which skip bounds apply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackPosition {
-    /// First track of a multi-track disc. Skip positions `1..=2940`.
+    /// First track of a multi-track disc. Skip positions `1..=2939`.
     First,
     /// Neither first nor last — no skip.
     Middle,
@@ -74,8 +74,7 @@ where
 {
     let (check_start, check_end) = skip_bounds(position, total_samples);
 
-    let mut v1: u32 = 0;
-    let mut v2: u32 = 0;
+    let mut crc = TrackCrc { v1: 0, v2: 0 };
     let mut pos: u32 = 1;
     let mut emitted: u32 = 0;
 
@@ -83,13 +82,7 @@ where
         let sector = sector?;
         for &sample in sector.iter() {
             if pos >= check_start && pos <= check_end {
-                // v1: 32-bit truncated product, wrapping add.
-                v1 = v1.wrapping_add(pos.wrapping_mul(sample));
-                // v2: 64-bit product, fold hi + lo back into 32-bit accumulator.
-                let product = pos as u64 * sample as u64;
-                let hi = (product >> 32) as u32;
-                let lo = (product & 0xFFFF_FFFF) as u32;
-                v2 = v2.wrapping_add(hi).wrapping_add(lo);
+                accumulate(&mut crc, pos, sample);
             }
             pos += 1;
         }
@@ -103,7 +96,31 @@ where
         )));
     }
 
-    Ok(TrackCrc { v1, v2 })
+    Ok(crc)
+}
+
+/// Compute both variants from an already-materialized track. Offset search
+/// and no-data evidence use this without repacking samples into sectors.
+pub fn track_crc_samples(samples: &[u32], position: TrackPosition) -> TrackCrc {
+    let total_samples = samples.len().min(u32::MAX as usize) as u32;
+    let (check_start, check_end) = skip_bounds(position, total_samples);
+    let mut crc = TrackCrc { v1: 0, v2: 0 };
+    for (index, &sample) in samples.iter().enumerate() {
+        let pos = index as u32 + 1;
+        if pos >= check_start && pos <= check_end {
+            accumulate(&mut crc, pos, sample);
+        }
+    }
+    crc
+}
+
+fn accumulate(crc: &mut TrackCrc, position: u32, sample: u32) {
+    crc.v1 = crc.v1.wrapping_add(position.wrapping_mul(sample));
+    let product = position as u64 * sample as u64;
+    crc.v2 = crc
+        .v2
+        .wrapping_add((product >> 32) as u32)
+        .wrapping_add(product as u32);
 }
 
 /// Derive inclusive 1-indexed check bounds from the track's disc position.

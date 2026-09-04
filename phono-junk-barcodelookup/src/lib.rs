@@ -30,14 +30,30 @@
 use phono_junk_core::{DiscIds, Toc};
 use phono_junk_identify::{
     AlbumMeta, AssetCandidate, AssetConfidence, AssetLookupCtx, AssetProvider, AssetType,
-    Credentials, DiscIdKind, HttpClient, HttpError, IdentificationProvider, ProviderError,
-    ProviderResult, ReleaseMeta,
+    Credentials, DiscIdKind, HostRatePolicy, HttpClient, HttpError, IdentificationProvider,
+    ProviderDescriptor, ProviderError, ProviderLookup, ProviderResult, ProviderTier,
+    ReleaseCandidate, ReleaseMeta,
 };
 use serde::Deserialize;
 use url::Url;
 
 const PROVIDER: &str = "barcodelookup";
 const CRED_KEY: &str = "barcodelookup";
+
+pub const DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
+    name: PROVIDER,
+    tier: ProviderTier::GenericBarcode,
+    required_ids: &[DiscIdKind::Barcode],
+    emitted_ids: &[],
+    identifies: true,
+    supplies_assets: true,
+    required_credential: Some(CRED_KEY),
+    host_rate_policy: Some(HostRatePolicy {
+        host: "api.barcodelookup.com",
+        requests: 1,
+        period_seconds: 1,
+    }),
+};
 const API_BASE: &str = "https://api.barcodelookup.com/v3/products";
 
 pub struct BarcodelookupProvider {
@@ -95,30 +111,34 @@ impl IdentificationProvider for BarcodelookupProvider {
         PROVIDER
     }
 
-    fn supported_ids(&self) -> &[DiscIdKind] {
+    fn supported_ids(&self) -> &'static [DiscIdKind] {
         // No catalog-number fallback — barcodelookup is strictly
         // barcode-indexed.
         &[DiscIdKind::Barcode]
     }
 
-    fn lookup(
+    fn descriptor(&self) -> ProviderDescriptor {
+        DESCRIPTOR
+    }
+
+    fn lookup_many(
         &self,
         _toc: &Toc,
         ids: &DiscIds,
         creds: &Credentials,
-    ) -> Result<Option<ProviderResult>, ProviderError> {
+    ) -> Result<ProviderLookup, ProviderError> {
         let Some(key) = creds.get(CRED_KEY) else {
             return Err(ProviderError::MissingCredential("barcodelookup"));
         };
         let Some(url) = build_search_url(ids, key) else {
-            return Ok(None);
+            return Ok(ProviderLookup::default());
         };
         let resp = self.http()?.get(&url).map_err(map_http_err)?;
         match resp.status {
-            200 => parse_search_response(&resp.body),
+            200 => parse_search_lookup(&resp.body),
             401 | 403 => Err(ProviderError::Auth("barcodelookup key rejected".into())),
             429 => Err(ProviderError::RateLimited),
-            404 => Ok(None),
+            404 => Ok(ProviderLookup::default()),
             code => Err(ProviderError::Network(format!("barcodelookup HTTP {code}"))),
         }
     }
@@ -129,7 +149,11 @@ impl AssetProvider for BarcodelookupProvider {
         PROVIDER
     }
 
-    fn asset_types(&self) -> &[AssetType] {
+    fn descriptor(&self) -> ProviderDescriptor {
+        DESCRIPTOR
+    }
+
+    fn asset_types(&self) -> &'static [AssetType] {
         // The `images` array on a barcodelookup response is not
         // semantically typed — the first entry is generally a product
         // photo of the front of the packaging. Don't over-claim
@@ -194,21 +218,43 @@ struct Product {
 /// logs a warning (same behaviour as Discogs / MusicBrainz multi-hit).
 /// Track data is never populated — barcodelookup has no track endpoint.
 pub fn parse_search_response(bytes: &[u8]) -> Result<Option<ProviderResult>, ProviderError> {
+    Ok(parse_search_lookup(bytes)?
+        .release_candidates
+        .into_iter()
+        .next()
+        .map(ReleaseCandidate::into_provider_result))
+}
+
+/// Preserve every product returned for the queried barcode. The generic
+/// provider does not get to discard alternatives before shared scoring.
+pub fn parse_search_lookup(bytes: &[u8]) -> Result<ProviderLookup, ProviderError> {
     let resp: ProductsResponse = serde_json::from_slice(bytes)
         .map_err(|e| ProviderError::Parse(format!("barcodelookup: {e}")))?;
 
     if resp.products.is_empty() {
-        return Ok(None);
-    }
-    if resp.products.len() > 1 {
-        log::warn!(
-            "barcodelookup returned {} products; picking first",
-            resp.products.len(),
-        );
+        return Ok(ProviderLookup::default());
     }
 
     let raw_response = serde_json::from_slice::<serde_json::Value>(bytes).ok();
-    let p = &resp.products[0];
+    let release_candidates = resp
+        .products
+        .iter()
+        .enumerate()
+        .map(|(index, product)| candidate_from_product(product, index, raw_response.clone()))
+        .collect();
+    Ok(ProviderLookup {
+        release_candidates,
+        raw_response,
+        ..ProviderLookup::default()
+    })
+}
+
+fn candidate_from_product(
+    product: &Product,
+    index: usize,
+    raw_response: Option<serde_json::Value>,
+) -> ReleaseCandidate {
+    let p = product;
 
     let artist_credit = p
         .manufacturer
@@ -218,14 +264,14 @@ pub fn parse_search_response(bytes: &[u8]) -> Result<Option<ProviderResult>, Pro
 
     let year = parse_release_year(p.release_date.as_deref());
 
-    let album = Some(AlbumMeta {
+    let album = AlbumMeta {
         title: p.title.clone().filter(|s| !s.trim().is_empty()),
         artist_credit,
         year,
         mbid: None,
-    });
+    };
 
-    let release = Some(ReleaseMeta {
+    let release = ReleaseMeta {
         country: None,
         date: p.release_date.clone().filter(|s| !s.trim().is_empty()),
         label: p.manufacturer.clone().filter(|s| !s.trim().is_empty()),
@@ -234,16 +280,22 @@ pub fn parse_search_response(bytes: &[u8]) -> Result<Option<ProviderResult>, Pro
         mbid: None,
         language: None,
         script: None,
-    });
+    };
 
-    Ok(Some(ProviderResult {
+    ReleaseCandidate {
+        candidate_key: format!(
+            "barcodelookup:{}:{index}",
+            release.barcode.as_deref().unwrap_or("unknown")
+        ),
+        provider: PROVIDER.to_string(),
         album,
         release,
         tracks: Vec::new(),
-        cover_art_urls: p.images.to_vec(),
-        provider: PROVIDER.to_string(),
+        physical_disc_number: None,
+        exact_disc_association: false,
         raw_response,
-    }))
+        cover_art_urls: p.images.to_vec(),
+    }
 }
 
 /// Parse a `/v3/products` response into asset candidates. The first
@@ -352,6 +404,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_search_lookup_retains_every_product() {
+        let bytes = br#"{"products":[
+            {"barcode_number":"123","title":"First","images":[]},
+            {"barcode_number":"123","title":"Second","images":[]}
+        ]}"#;
+        let lookup = parse_search_lookup(bytes).unwrap();
+        assert_eq!(lookup.release_candidates.len(), 2);
+        assert_eq!(
+            lookup.release_candidates[0].candidate_key,
+            "barcodelookup:123:0"
+        );
+        assert_eq!(
+            lookup.release_candidates[1].candidate_key,
+            "barcodelookup:123:1"
+        );
+    }
+
+    #[test]
     fn parse_search_response_falls_back_to_brand_when_manufacturer_missing() {
         let bytes = br#"{"products":[{
             "barcode_number":"0000000000000",
@@ -392,7 +462,7 @@ mod tests {
     fn missing_token_is_missing_credential_error() {
         let p = BarcodelookupProvider::new();
         let err = p
-            .lookup(
+            .lookup_many(
                 &minimal_toc(),
                 &barcode_ids("0123456789012"),
                 &Credentials::new(),
@@ -407,13 +477,13 @@ mod tests {
     #[test]
     fn missing_barcode_is_none_not_error() {
         // With a credential but no barcode, the provider returns
-        // Ok(None) rather than reaching for the network.
+        // An empty lookup rather than reaching for the network.
         let p = BarcodelookupProvider::new();
         let mut creds = Credentials::new();
         creds.set("barcodelookup", "KEY");
         let out = p
-            .lookup(&minimal_toc(), &DiscIds::default(), &creds)
+            .lookup_many(&minimal_toc(), &DiscIds::default(), &creds)
             .unwrap();
-        assert!(out.is_none());
+        assert!(out.release_candidates.is_empty());
     }
 }

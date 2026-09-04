@@ -18,8 +18,9 @@ use nonzero_ext::nonzero;
 use phono_junk_core::{DiscIds, Toc};
 use phono_junk_identify::{
     AlbumMeta, AssetCandidate, AssetConfidence, AssetLookupCtx, AssetProvider, AssetType,
-    Credentials, DiscIdKind, HttpClient, HttpError, IdentificationProvider, ProviderError,
-    ProviderResult, ReleaseMeta, TrackMeta,
+    Credentials, DiscIdKind, HostRatePolicy, HttpClient, HttpError, IdentificationProvider,
+    ProviderDescriptor, ProviderError, ProviderLookup, ProviderResult, ProviderTier,
+    ReleaseCandidate, ReleaseMeta, TrackMeta,
 };
 use url::Url;
 
@@ -28,6 +29,36 @@ mod json;
 
 const PROVIDER_MB: &str = "musicbrainz";
 const PROVIDER_CAA: &str = "cover-art-archive";
+
+pub const MUSICBRAINZ_DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
+    name: PROVIDER_MB,
+    tier: ProviderTier::ExactDisc,
+    required_ids: &[DiscIdKind::MbDiscId],
+    emitted_ids: &[DiscIdKind::Barcode, DiscIdKind::CatalogNumber],
+    identifies: true,
+    supplies_assets: true,
+    required_credential: None,
+    host_rate_policy: Some(HostRatePolicy {
+        host: "musicbrainz.org",
+        requests: 1,
+        period_seconds: 1,
+    }),
+};
+
+pub const COVER_ART_ARCHIVE_DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
+    name: PROVIDER_CAA,
+    tier: ProviderTier::MusicApi,
+    required_ids: &[DiscIdKind::MbDiscId],
+    emitted_ids: &[],
+    identifies: false,
+    supplies_assets: true,
+    required_credential: None,
+    host_rate_policy: Some(HostRatePolicy {
+        host: "coverartarchive.org",
+        requests: 1,
+        period_seconds: 1,
+    }),
+};
 
 // -------------------- MusicBrainz --------------------
 
@@ -58,18 +89,22 @@ impl IdentificationProvider for MusicBrainzProvider {
         PROVIDER_MB
     }
 
-    fn supported_ids(&self) -> &[DiscIdKind] {
+    fn supported_ids(&self) -> &'static [DiscIdKind] {
         &[DiscIdKind::MbDiscId]
     }
 
-    fn lookup(
+    fn descriptor(&self) -> ProviderDescriptor {
+        MUSICBRAINZ_DESCRIPTOR
+    }
+
+    fn lookup_many(
         &self,
         _toc: &Toc,
         ids: &DiscIds,
         _creds: &Credentials,
-    ) -> Result<Option<ProviderResult>, ProviderError> {
+    ) -> Result<ProviderLookup, ProviderError> {
         let Some(discid) = ids.mb_discid.as_ref() else {
-            return Ok(None);
+            return Ok(ProviderLookup::default());
         };
         let url = Url::parse(&format!(
             "https://musicbrainz.org/ws/2/discid/{discid}?inc=artists+recordings+release-groups&fmt=json"
@@ -77,12 +112,110 @@ impl IdentificationProvider for MusicBrainzProvider {
         .map_err(|e| ProviderError::Other(format!("musicbrainz URL: {e}")))?;
         let resp = self.http.get(&url).map_err(map_http_err)?;
         match resp.status {
-            200 => parse_discid_response(&resp.body),
-            404 => Ok(None),
+            200 => parse_discid_candidates(&resp.body, discid),
+            404 => Ok(ProviderLookup::default()),
             code => Err(ProviderError::Other(format!(
                 "musicbrainz returned HTTP {code}"
             ))),
         }
+    }
+}
+
+/// Retain every release/medium returned for a DiscID. When MusicBrainz
+/// includes medium-level `discs`, only media carrying the queried DiscID are
+/// emitted; older/minimal fixtures without that array remain candidates but
+/// are not marked as exact medium associations.
+pub fn parse_discid_candidates(
+    bytes: &[u8],
+    queried_discid: &str,
+) -> Result<ProviderLookup, ProviderError> {
+    let response: json::DiscidResponse = serde_json::from_slice(bytes)
+        .map_err(|e| ProviderError::Parse(format!("musicbrainz discid: {e}")))?;
+    let raw_response = serde_json::from_slice::<serde_json::Value>(bytes).ok();
+    let mut release_candidates = Vec::new();
+    for release in &response.releases {
+        let has_disc_associations = release.media.iter().any(|medium| !medium.discs.is_empty());
+        for (medium_index, medium) in release.media.iter().enumerate() {
+            let exact = medium.discs.iter().any(|disc| disc.id == queried_discid);
+            if has_disc_associations && !exact {
+                continue;
+            }
+            let provider = result_for_release_medium(release, medium, raw_response.clone());
+            let Some(mut candidate) = ReleaseCandidate::from_result(provider) else {
+                continue;
+            };
+            let disc_number = medium.position.unwrap_or(medium_index as u8 + 1);
+            candidate.physical_disc_number = Some(disc_number);
+            candidate.exact_disc_association = exact || response.releases.len() == 1;
+            candidate.candidate_key =
+                format!("musicbrainz:release:{}:medium:{disc_number}", release.id);
+            release_candidates.push(candidate);
+        }
+    }
+    Ok(ProviderLookup {
+        release_candidates,
+        raw_response,
+        ..ProviderLookup::default()
+    })
+}
+
+fn result_for_release_medium(
+    release: &json::Release,
+    medium: &json::Medium,
+    raw_response: Option<serde_json::Value>,
+) -> ProviderResult {
+    let artist = artist_credit::format(&release.artist_credit);
+    let (language, script) = release
+        .text_representation
+        .as_ref()
+        .map(|representation| {
+            (
+                representation.language.clone(),
+                representation.script.clone(),
+            )
+        })
+        .unwrap_or((None, None));
+    ProviderResult {
+        album: Some(AlbumMeta {
+            title: Some(release.title.clone()),
+            artist_credit: (!artist.is_empty()).then_some(artist),
+            year: release.date.as_deref().and_then(parse_year),
+            mbid: release.release_group.as_ref().map(|group| group.id.clone()),
+        }),
+        release: Some(ReleaseMeta {
+            country: release.country.clone(),
+            date: release.date.clone(),
+            label: release
+                .label_info
+                .iter()
+                .find_map(|info| info.label.as_ref().map(|label| label.name.clone())),
+            catalog_number: release
+                .label_info
+                .iter()
+                .find_map(|info| info.catalog_number.clone()),
+            barcode: release.barcode.clone(),
+            mbid: Some(release.id.clone()),
+            language,
+            script,
+        }),
+        tracks: medium
+            .tracks
+            .iter()
+            .map(|track| TrackMeta {
+                position: track.position,
+                title: Some(track.title.clone()),
+                artist_credit: None,
+                length_frames: track.length.map(ms_to_frames),
+                isrc: None,
+                mbid: track
+                    .recording
+                    .as_ref()
+                    .map(|recording| recording.id.clone()),
+            })
+            .collect(),
+        cover_art_urls: Vec::new(),
+        provider: PROVIDER_MB.to_string(),
+        raw_response,
     }
 }
 
@@ -219,7 +352,11 @@ impl AssetProvider for CoverArtArchiveProvider {
         PROVIDER_CAA
     }
 
-    fn asset_types(&self) -> &[AssetType] {
+    fn descriptor(&self) -> ProviderDescriptor {
+        COVER_ART_ARCHIVE_DESCRIPTOR
+    }
+
+    fn asset_types(&self) -> &'static [AssetType] {
         &[
             AssetType::FrontCover,
             AssetType::BackCover,

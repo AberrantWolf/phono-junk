@@ -127,7 +127,7 @@ fn missing_token_returns_missing_credential_error() {
     let creds = Credentials::new();
     let toc = default_toc();
     let ids = ids_with_barcode("0123456789012");
-    match provider.lookup(&toc, &ids, &creds) {
+    match provider.lookup_many(&toc, &ids, &creds) {
         Err(ProviderError::MissingCredential("discogs")) => {}
         other => panic!("expected MissingCredential, got {other:?}"),
     }

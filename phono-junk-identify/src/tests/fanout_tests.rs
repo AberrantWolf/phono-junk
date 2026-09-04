@@ -13,8 +13,8 @@ use phono_junk_core::{DiscIds, Toc};
 use url::Url;
 
 use crate::{
-    Credentials, DiscIdKind, HttpClient, IdentificationProvider, ProviderError, ProviderResult,
-    identify_parallel,
+    Aggregator, Credentials, DiscIdKind, HttpClient, IdentificationProvider, ProviderError,
+    ProviderLookup,
 };
 
 struct HttpProbe {
@@ -27,20 +27,20 @@ impl IdentificationProvider for HttpProbe {
     fn name(&self) -> &'static str {
         self.name
     }
-    fn supported_ids(&self) -> &[DiscIdKind] {
+    fn supported_ids(&self) -> &'static [DiscIdKind] {
         &[DiscIdKind::MbDiscId]
     }
-    fn lookup(
+    fn lookup_many(
         &self,
         _toc: &Toc,
         _ids: &DiscIds,
         _creds: &Credentials,
-    ) -> Result<Option<ProviderResult>, ProviderError> {
+    ) -> Result<ProviderLookup, ProviderError> {
         let _ = self
             .http
             .get(&self.url)
             .map_err(|e| ProviderError::Network(e.to_string()))?;
-        Ok(None)
+        Ok(ProviderLookup::default())
     }
 }
 
@@ -68,23 +68,26 @@ fn shared_host_bucket_serializes_requests_across_cloned_clients() {
         .unwrap();
 
     let url = Url::parse(&server.url("/probe")).unwrap();
-    let providers: Vec<Box<dyn IdentificationProvider>> = vec![
-        Box::new(HttpProbe {
+    let mut aggregator = Aggregator::new();
+    for provider in [
+        HttpProbe {
             name: "p1",
             http: http.clone(),
             url: url.clone(),
-        }),
-        Box::new(HttpProbe {
+        },
+        HttpProbe {
             name: "p2",
             http: http.clone(),
             url: url.clone(),
-        }),
-        Box::new(HttpProbe {
+        },
+        HttpProbe {
             name: "p3",
             http,
             url,
-        }),
-    ];
+        },
+    ] {
+        aggregator.register_identifier(Box::new(provider));
+    }
 
     let toc = Toc {
         first_track: 1,
@@ -98,7 +101,7 @@ fn shared_host_bucket_serializes_requests_across_cloned_clients() {
     };
 
     let t0 = Duration::from(clock.now());
-    let _ = identify_parallel(&providers, &toc, &ids, &Credentials::new());
+    let _ = aggregator.identify_staged(&toc, &ids, &Credentials::new());
     let elapsed = Duration::from(clock.now()) - t0;
     assert!(
         elapsed >= Duration::from_millis(1990),

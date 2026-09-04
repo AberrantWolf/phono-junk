@@ -1,9 +1,11 @@
-//! Schema v1 tests: fresh-DB creation, idempotency, on-disk round-trip,
+//! Schema v7 tests: fresh-DB creation, idempotency, on-disk round-trip,
 //! version-mismatch rejection, and foreign-key enforcement.
 
 use std::collections::BTreeSet;
 
-use phono_junk_db::{CURRENT_VERSION, SchemaError, create_schema, open_database, open_memory};
+use phono_junk_db::{
+    CURRENT_VERSION, SchemaError, create_schema, open_database, open_memory, reset_database,
+};
 use rusqlite::{Connection, params};
 
 fn table_names(conn: &Connection) -> BTreeSet<String> {
@@ -34,13 +36,21 @@ fn open_memory_creates_all_tables() {
     let expected = [
         "albums",
         "assets",
+        "candidate_observations",
         "disagreements",
+        "dbar_responses",
         "discs",
+        "identification_attempts",
+        "identification_candidates",
         "overrides",
+        "provider_observations",
         "releases",
         "rip_files",
+        "rip_file_provenance",
         "schema_version",
+        "track_verifications",
         "tracks",
+        "verification_runs",
     ];
     for name in expected {
         assert!(tables.contains(name), "missing table: {name}");
@@ -55,8 +65,9 @@ fn open_memory_creates_all_tables() {
     }
     assert!(column_names(&conn, "releases").contains("status"));
     assert!(column_names(&conn, "discs").contains("format"));
-    assert!(column_names(&conn, "discs").contains("dbar_raw"));
+    assert!(column_names(&conn, "discs").contains("stable_key"));
     assert!(column_names(&conn, "tracks").contains("recording_mbid"));
+    assert!(column_names(&conn, "rip_files").contains("stable_key"));
 
     // schema_version row was written exactly once.
     let count: i64 = conn
@@ -139,11 +150,49 @@ fn version_mismatch_rejects_future_db() {
     }
 }
 
-// `version_mismatch_rejects_older_db` would belong here, but while
-// CURRENT_VERSION == 1 no non-fresh-DB value can satisfy `0 < v < 1`.
-// Both directions share the same `version != CURRENT_VERSION` branch that
-// `version_mismatch_rejects_future_db` already exercises. Add an explicit
-// older-DB test once CURRENT_VERSION bumps to 2+.
+#[test]
+fn v6_returns_typed_rebuild_required() {
+    let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+    let path = tmp.path().to_path_buf();
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_version (version INTEGER NOT NULL);\
+         INSERT INTO schema_version(version) VALUES (6);",
+    )
+    .unwrap();
+    drop(conn);
+
+    match open_database(&path) {
+        Err(SchemaError::RebuildRequired { expected, found }) => {
+            assert_eq!(expected, 7);
+            assert_eq!(found, 6);
+        }
+        other => panic!("expected RebuildRequired, got: {other:?}"),
+    }
+}
+
+#[test]
+fn confirmed_reset_replaces_v6_with_v7() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("catalog.db");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_version (version INTEGER NOT NULL);\
+         INSERT INTO schema_version(version) VALUES (6);",
+    )
+    .unwrap();
+    drop(conn);
+
+    drop(reset_database(&path).expect("reset database"));
+    let conn = open_database(&path).expect("open rebuilt database");
+    let version: i32 = conn
+        .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(version, CURRENT_VERSION);
+    assert!(table_names(&conn).contains("verification_runs"));
+}
 
 #[test]
 fn foreign_keys_enforced() {

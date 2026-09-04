@@ -14,8 +14,8 @@
 use governor::Quota;
 use nonzero_ext::nonzero;
 use phono_junk_identify::{
-    AssetCandidate, AssetConfidence, AssetLookupCtx, AssetProvider, AssetType, HttpClient,
-    HttpError, ProviderError,
+    AssetCandidate, AssetConfidence, AssetLookupCtx, AssetProvider, AssetType, HostRatePolicy,
+    HttpClient, HttpError, ProviderDescriptor, ProviderError, ProviderTier,
 };
 use url::Url;
 
@@ -23,6 +23,21 @@ mod json;
 
 const PROVIDER: &str = "itunes";
 const SEARCH_ENDPOINT: &str = "https://itunes.apple.com/search";
+
+pub const DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
+    name: PROVIDER,
+    tier: ProviderTier::MusicApi,
+    required_ids: &[],
+    emitted_ids: &[],
+    identifies: false,
+    supplies_assets: true,
+    required_credential: None,
+    host_rate_policy: Some(HostRatePolicy {
+        host: "itunes.apple.com",
+        requests: 20,
+        period_seconds: 60,
+    }),
+};
 
 pub struct ITunesProvider {
     http: HttpClient,
@@ -49,7 +64,11 @@ impl AssetProvider for ITunesProvider {
         PROVIDER
     }
 
-    fn asset_types(&self) -> &[AssetType] {
+    fn descriptor(&self) -> ProviderDescriptor {
+        DESCRIPTOR
+    }
+
+    fn asset_types(&self) -> &'static [AssetType] {
         &[AssetType::FrontCover]
     }
 

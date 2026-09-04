@@ -24,6 +24,12 @@ pub struct AccurateRipClient {
     http: HttpClient,
 }
 
+#[derive(Debug)]
+pub struct FetchedDbar {
+    pub dbar: DbarFile,
+    pub body: Vec<u8>,
+}
+
 impl AccurateRipClient {
     pub fn new(user_agent: impl Into<String>) -> Result<Self, HttpError> {
         let http = HttpClient::builder()
@@ -50,8 +56,30 @@ impl AccurateRipClient {
         ids: &DiscIds,
         track_count: u8,
     ) -> Result<Option<DbarFile>, AccurateRipError> {
+        Ok(self
+            .fetch_dbar_evidence(ids, track_count)?
+            .map(|fetched| fetched.dbar))
+    }
+
+    /// Fetch a validated dBAR together with its immutable raw body for the
+    /// catalog evidence store.
+    pub fn fetch_dbar_evidence(
+        &self,
+        ids: &DiscIds,
+        track_count: u8,
+    ) -> Result<Option<FetchedDbar>, AccurateRipError> {
         let url = dbar_url(ids, track_count)?;
-        self.fetch_at_url(&url)
+        let result = self.fetch_evidence_at_url(&url)?;
+        let Some(fetched) = result else {
+            return Ok(None);
+        };
+        fetched.dbar.validate_request(
+            track_count,
+            parse_id(ids.ar_discid1.as_deref(), "ar_discid1")?,
+            parse_id(ids.ar_discid2.as_deref(), "ar_discid2")?,
+            parse_id(ids.cddb_id.as_deref(), "cddb_id")?,
+        )?;
+        Ok(Some(fetched))
     }
 
     /// Fetch and parse a dBAR from a caller-supplied URL.
@@ -61,13 +89,29 @@ impl AccurateRipClient {
     /// mock HTTP server (the real fetch_dbar always hits
     /// `www.accuraterip.com`).
     pub fn fetch_at_url(&self, url: &url::Url) -> Result<Option<DbarFile>, AccurateRipError> {
+        Ok(self.fetch_evidence_at_url(url)?.map(|fetched| fetched.dbar))
+    }
+
+    fn fetch_evidence_at_url(
+        &self,
+        url: &url::Url,
+    ) -> Result<Option<FetchedDbar>, AccurateRipError> {
         let resp = self.http.get(url)?;
         match resp.status {
-            200 => Ok(Some(DbarFile::parse(&resp.body)?)),
+            200 => Ok(Some(FetchedDbar {
+                dbar: DbarFile::parse(&resp.body)?,
+                body: resp.body,
+            })),
             404 => Ok(None),
             code => Err(AccurateRipError::Parse(format!(
                 "accuraterip.com returned HTTP {code}"
             ))),
         }
     }
+}
+
+fn parse_id(value: Option<&str>, name: &'static str) -> Result<u32, AccurateRipError> {
+    let value = value.ok_or(AccurateRipError::MissingId(name))?;
+    u32::from_str_radix(value, 16)
+        .map_err(|_| AccurateRipError::Parse(format!("invalid hexadecimal {name}: {value}")))
 }

@@ -6,7 +6,7 @@
 //! parser and the format description in
 //! `.claude/skills/phono-archive/formats/AccurateRip.md`.
 
-use phono_junk_accuraterip::{AccurateRipError, DbarFile, DbarResponse, ExpectedCrc};
+use phono_junk_accuraterip::{AccurateRipError, DbarFile, DbarResponse, ExpectedChecksum};
 
 /// Build one response as raw little-endian bytes.
 fn build_response(
@@ -54,20 +54,20 @@ fn single_response_three_tracks_round_trips() {
             ar_id2: 0x001c_c184,
             cddb_id: 0x1911_7f03,
             tracks: vec![
-                ExpectedCrc {
+                ExpectedChecksum {
                     confidence: 5,
-                    v1: 0xdead_beef,
-                    v2: 0xcafe_f00d
+                    checksum: 0xdead_beef,
+                    checksum_450: 0xcafe_f00d
                 },
-                ExpectedCrc {
+                ExpectedChecksum {
                     confidence: 3,
-                    v1: 0x1234_5678,
-                    v2: 0
+                    checksum: 0x1234_5678,
+                    checksum_450: 0
                 },
-                ExpectedCrc {
+                ExpectedChecksum {
                     confidence: 12,
-                    v1: 0xffff_ffff,
-                    v2: 0x0000_0001
+                    checksum: 0xffff_ffff,
+                    checksum_450: 0x0000_0001
                 },
             ],
         }
@@ -95,7 +95,7 @@ fn two_stacked_responses_parse_in_order() {
     assert_eq!(parsed.responses.len(), 2);
     assert_eq!(parsed.responses[0].ar_id1, 0x1111_1111);
     assert_eq!(parsed.responses[1].ar_id1, 0x4444_4444);
-    assert_eq!(parsed.responses[0].tracks[1].v2, 0);
+    assert_eq!(parsed.responses[0].tracks[1].checksum_450, 0);
     assert_eq!(parsed.responses[1].tracks[0].confidence, 1);
 }
 
@@ -159,9 +159,20 @@ fn entries_for_track_yields_all_pressings_at_position() {
     let hits: Vec<_> = parsed.entries_for_track(2).collect();
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].0, 0);
-    assert_eq!(hits[0].1.v1, 0xcc);
+    assert_eq!(hits[0].1.checksum, 0xcc);
     assert_eq!(hits[1].0, 1);
-    assert_eq!(hits[1].1.v1, 0x33);
+    assert_eq!(hits[1].1.checksum, 0x33);
+}
+
+#[test]
+fn request_validation_rejects_wrong_header_or_track_count() {
+    let bytes = build_response(2, 1, 2, 3, &[(5, 0xaa, 0xbb), (5, 0xcc, 0xdd)]);
+    let parsed = DbarFile::parse(&bytes).unwrap();
+    parsed.validate_request(2, 1, 2, 3).unwrap();
+    let error = parsed.validate_request(3, 1, 2, 3).unwrap_err();
+    assert!(error.to_string().contains("does not match request"));
+    let error = parsed.validate_request(2, 9, 2, 3).unwrap_err();
+    assert!(error.to_string().contains("does not match request"));
 }
 
 #[test]

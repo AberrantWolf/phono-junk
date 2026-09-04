@@ -25,14 +25,30 @@ use phono_junk_core::{DiscIds, Toc};
 use phono_junk_identify::header::{AUTHORIZATION, HeaderName, HeaderValue};
 use phono_junk_identify::{
     AlbumMeta, AssetCandidate, AssetConfidence, AssetLookupCtx, AssetProvider, AssetType,
-    Credentials, DiscIdKind, HttpClient, HttpError, IdentificationProvider, ProviderError,
-    ProviderResult, ReleaseMeta,
+    Credentials, DiscIdKind, HostRatePolicy, HttpClient, HttpError, IdentificationProvider,
+    ProviderDescriptor, ProviderError, ProviderLookup, ProviderResult, ProviderTier,
+    ReleaseCandidate, ReleaseMeta,
 };
 use serde::Deserialize;
 use url::Url;
 
 const PROVIDER: &str = "discogs";
 const CRED_KEY: &str = "discogs";
+
+pub const DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
+    name: PROVIDER,
+    tier: ProviderTier::MusicApi,
+    required_ids: &[DiscIdKind::Barcode, DiscIdKind::CatalogNumber],
+    emitted_ids: &[DiscIdKind::Barcode, DiscIdKind::CatalogNumber],
+    identifies: true,
+    supplies_assets: true,
+    required_credential: Some(CRED_KEY),
+    host_rate_policy: Some(HostRatePolicy {
+        host: "api.discogs.com",
+        requests: 60,
+        period_seconds: 60,
+    }),
+};
 
 pub struct DiscogsProvider {
     http: Option<HttpClient>,
@@ -99,16 +115,20 @@ impl IdentificationProvider for DiscogsProvider {
         PROVIDER
     }
 
-    fn supported_ids(&self) -> &[DiscIdKind] {
+    fn supported_ids(&self) -> &'static [DiscIdKind] {
         &[DiscIdKind::Barcode, DiscIdKind::CatalogNumber]
     }
 
-    fn lookup(
+    fn descriptor(&self) -> ProviderDescriptor {
+        DESCRIPTOR
+    }
+
+    fn lookup_many(
         &self,
         _toc: &Toc,
         ids: &DiscIds,
         creds: &Credentials,
-    ) -> Result<Option<ProviderResult>, ProviderError> {
+    ) -> Result<ProviderLookup, ProviderError> {
         let Some(token) = creds.get(CRED_KEY) else {
             // Fan-out collects this as a per-provider error so the GUI's
             // detail panel can show a "no token" row instead of a silent
@@ -116,7 +136,7 @@ impl IdentificationProvider for DiscogsProvider {
             return Err(ProviderError::MissingCredential("discogs"));
         };
         let Some(url) = build_search_url(ids) else {
-            return Ok(None);
+            return Ok(ProviderLookup::default());
         };
         let headers = auth_headers(token)?;
         let resp = self
@@ -124,10 +144,10 @@ impl IdentificationProvider for DiscogsProvider {
             .get_with_headers(&url, &headers)
             .map_err(map_http_err)?;
         match resp.status {
-            200 => parse_search_response(&resp.body),
+            200 => parse_search_lookup(&resp.body),
             401 | 403 => Err(ProviderError::Auth("discogs token rejected".into())),
             429 => Err(ProviderError::RateLimited),
-            404 => Ok(None),
+            404 => Ok(ProviderLookup::default()),
             code => Err(ProviderError::Network(format!(
                 "discogs search HTTP {code}"
             ))),
@@ -140,7 +160,11 @@ impl AssetProvider for DiscogsProvider {
         PROVIDER
     }
 
-    fn asset_types(&self) -> &[AssetType] {
+    fn descriptor(&self) -> ProviderDescriptor {
+        DESCRIPTOR
+    }
+
+    fn asset_types(&self) -> &'static [AssetType] {
         &[AssetType::FrontCover]
     }
 
@@ -217,51 +241,74 @@ struct SearchHit {
 /// surface. The detail endpoint (`/releases/<id>`) returns split fields
 /// but costs a second round-trip.
 pub fn parse_search_response(bytes: &[u8]) -> Result<Option<ProviderResult>, ProviderError> {
+    Ok(parse_search_lookup(bytes)?
+        .release_candidates
+        .into_iter()
+        .next()
+        .map(ReleaseCandidate::into_provider_result))
+}
+
+/// Parse every search hit into provider-neutral evidence. Search order is
+/// retained in the observation, but candidate selection belongs to the shared
+/// scorer rather than this provider.
+pub fn parse_search_lookup(bytes: &[u8]) -> Result<ProviderLookup, ProviderError> {
     let resp: SearchResponse = serde_json::from_slice(bytes)
         .map_err(|e| ProviderError::Parse(format!("discogs search: {e}")))?;
 
     if resp.results.is_empty() {
-        return Ok(None);
-    }
-    if resp.results.len() > 1 {
-        log::warn!(
-            "discogs search returned {} hits; picking first ({})",
-            resp.results.len(),
-            resp.results[0].id.unwrap_or(0),
-        );
+        return Ok(ProviderLookup::default());
     }
 
     let raw_response = serde_json::from_slice::<serde_json::Value>(bytes).ok();
-    let hit = &resp.results[0];
+    let release_candidates = resp
+        .results
+        .iter()
+        .enumerate()
+        .map(|(index, hit)| candidate_from_hit(hit, index, raw_response.clone()))
+        .collect();
+    Ok(ProviderLookup {
+        release_candidates,
+        raw_response,
+        ..ProviderLookup::default()
+    })
+}
+
+fn candidate_from_hit(
+    hit: &SearchHit,
+    index: usize,
+    raw_response: Option<serde_json::Value>,
+) -> ReleaseCandidate {
     let (artist, title) = split_title(hit.title.as_deref());
     let year = hit.year.as_ref().and_then(parse_year);
 
-    let album = Some(AlbumMeta {
-        title,
-        artist_credit: artist,
-        year,
-        mbid: None,
-    });
-
-    let release = Some(ReleaseMeta {
-        country: hit.country.clone(),
-        date: year.map(|y| y.to_string()),
-        label: hit.label.first().cloned(),
-        catalog_number: hit.catno.clone(),
-        barcode: hit.barcode.first().cloned(),
-        mbid: None,
-        language: None,
-        script: None,
-    });
-
-    Ok(Some(ProviderResult {
-        album,
-        release,
-        tracks: Vec::new(),
-        cover_art_urls: hit.cover_image.clone().into_iter().collect(),
+    ReleaseCandidate {
+        candidate_key: hit
+            .id
+            .map(|id| format!("discogs:release:{id}"))
+            .unwrap_or_else(|| format!("discogs:search-hit:{index}")),
         provider: PROVIDER.to_string(),
+        album: AlbumMeta {
+            title,
+            artist_credit: artist,
+            year,
+            mbid: None,
+        },
+        release: ReleaseMeta {
+            country: hit.country.clone(),
+            date: year.map(|value| value.to_string()),
+            label: hit.label.first().cloned(),
+            catalog_number: hit.catno.clone(),
+            barcode: hit.barcode.first().cloned(),
+            mbid: None,
+            language: None,
+            script: None,
+        },
+        tracks: Vec::new(),
+        physical_disc_number: None,
+        exact_disc_association: false,
         raw_response,
-    }))
+        cover_art_urls: hit.cover_image.clone().into_iter().collect(),
+    }
 }
 
 /// Parse a `/database/search` response into a list of cover-image asset
@@ -345,6 +392,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_search_lookup_retains_every_release_hit() {
+        let bytes = br#"{"results":[
+            {"id":10,"title":"Artist - First","barcode":["123"]},
+            {"id":20,"title":"Artist - Second","barcode":["123"]}
+        ]}"#;
+        let lookup = parse_search_lookup(bytes).unwrap();
+        assert_eq!(lookup.release_candidates.len(), 2);
+        assert_eq!(
+            lookup.release_candidates[0].candidate_key,
+            "discogs:release:10"
+        );
+        assert_eq!(
+            lookup.release_candidates[1].candidate_key,
+            "discogs:release:20"
+        );
+    }
+
+    #[test]
     fn parse_search_assets_emits_front_cover() {
         let bytes = include_bytes!("../tests/fixtures/search_barcode_hit.json");
         let assets = parse_search_assets(bytes).unwrap();
@@ -417,7 +482,7 @@ mod tests {
         };
         let p = DiscogsProvider::new();
         let creds = Credentials::new();
-        let err = p.lookup(&toc, &ids, &creds).unwrap_err();
+        let err = p.lookup_many(&toc, &ids, &creds).unwrap_err();
         assert!(matches!(err, ProviderError::MissingCredential("discogs")));
     }
 }

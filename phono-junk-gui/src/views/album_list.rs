@@ -43,8 +43,8 @@
 //!    selection is preserved and the menu applies to the whole
 //!    multi-selection.
 //! 8. **Re-verify** — kick off with 3 selected; watch the activity bar
-//!    tick `1/3 … 3/3`; verify `accuraterip_status` updated in the DB
-//!    (`sqlite3 file.db "SELECT accuraterip_status FROM rip_files"`).
+//!    tick `1/3 … 3/3`; verify the latest structured verification run is
+//!    reflected in the album detail.
 //! 9. **Export** — click Export (N)…, pick an empty folder; confirm
 //!    `<folder>/<Artist>/<Album> (Year)/NN - Title.flac` lands.
 //! 10. **Parallel ops** — start a scan and an export simultaneously;
@@ -60,7 +60,7 @@
 
 use egui::{Label, RichText, TextEdit, Ui};
 use egui_extras::{Column, TableBuilder};
-use phono_junk_core::IdentificationState;
+use phono_junk_lib::IdentificationState;
 use phono_junk_lib::list::{
     ListEntry, ListRow, SortKey, UnidentifiedRow, YearSpec, filter_entries, sort_entries,
 };
@@ -113,7 +113,7 @@ fn toolbar(ui: &mut Ui, app: &mut PhonoApp) {
             open_db(app, path);
         }
 
-        let has_db = app.db_conn.is_some();
+        let has_db = app.session.is_some();
         if ui
             .add_enabled(has_db, egui::Button::new("Refresh"))
             .clicked()
@@ -261,15 +261,20 @@ fn open_db(app: &mut PhonoApp, path: std::path::PathBuf) {
     app.db_path = Some(path.clone());
     app.selected.clear();
     app.selection_anchor = None;
-    match phono_junk_db::open_database(&path) {
-        Ok(conn) => {
-            app.db_conn = Some(conn);
+    let result = match app.session.as_mut() {
+        Some(session) => session.switch_database(&path),
+        None => phono_junk_lib::LibrarySession::open(&path, app.phono_ctx.clone()).map(|session| {
+            app.session = Some(session);
+        }),
+    };
+    match result {
+        Ok(()) => {
             app.load_error = None;
             app.reload_rows();
             app.rescan_tracked_folders();
         }
         Err(e) => {
-            app.db_conn = None;
+            app.session = None;
             app.load_error = Some(format!("open database: {e}"));
         }
     }
@@ -379,7 +384,7 @@ fn opt_string(s: &str) -> Option<String> {
 }
 
 fn table(ui: &mut Ui, app: &mut PhonoApp) {
-    if app.db_conn.is_none() {
+    if app.session.is_none() {
         ui.centered_and_justified(|ui| {
             ui.label("Open a phono-junk catalog database to view its albums.");
         });

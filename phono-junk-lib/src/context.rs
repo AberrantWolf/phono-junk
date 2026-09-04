@@ -1,9 +1,5 @@
-use std::time::Duration;
-
-use governor::Quota;
-use nonzero_ext::nonzero;
 use phono_junk_accuraterip::{ACCURATERIP_HOST, AccurateRipClient};
-use phono_junk_identify::{Aggregator, HttpClient, HttpError};
+use phono_junk_identify::{Aggregator, HostRatePolicy, HttpClient, HttpError};
 
 use crate::credentials::CredentialStore;
 
@@ -59,23 +55,29 @@ impl PhonoContext {
     /// from the OS keyring. A missing backend is non-fatal: identification
     /// still works, Discogs just silently skips without a token.
     ///
-    /// Amazon is registered once an ASIN source exists (populated from
-    /// Discogs responses) — deferred. See TODO.md.
     pub fn with_default_providers(user_agent: impl Into<String>) -> Result<Self, HttpError> {
-        let http = HttpClient::builder()
-            .user_agent(user_agent)
-            .host_quota("musicbrainz.org", Quota::per_second(nonzero!(1u32)))
-            .host_quota("coverartarchive.org", Quota::per_second(nonzero!(1u32)))
-            .host_quota("itunes.apple.com", Quota::per_minute(nonzero!(20u32)))
-            .host_quota("api.discogs.com", Quota::per_second(nonzero!(1u32)))
-            .host_quota("api.barcodelookup.com", Quota::per_second(nonzero!(1u32)))
-            // Tower MDB is a scrape target — 1 request per 2 seconds.
-            .host_quota(
-                "mdb.tower.jp",
-                Quota::with_period(Duration::from_secs(2)).expect("2s period is non-zero"),
-            )
-            .host_quota(ACCURATERIP_HOST, Quota::per_second(nonzero!(1u32)))
-            .build()?;
+        let descriptors = [
+            phono_junk_musicbrainz::MUSICBRAINZ_DESCRIPTOR,
+            phono_junk_musicbrainz::COVER_ART_ARCHIVE_DESCRIPTOR,
+            phono_junk_itunes::DESCRIPTOR,
+            phono_junk_discogs::DESCRIPTOR,
+            phono_junk_tower::DESCRIPTOR,
+            phono_junk_barcodelookup::DESCRIPTOR,
+        ];
+        let mut builder = HttpClient::builder().user_agent(user_agent);
+        for descriptor in descriptors {
+            if let Some(policy) = descriptor.host_rate_policy {
+                builder = builder.host_rate_policy(policy);
+            }
+        }
+        // AccurateRip is verification rather than an identification/asset
+        // provider, but it shares the same transport and limiter registry.
+        builder = builder.host_rate_policy(HostRatePolicy {
+            host: ACCURATERIP_HOST,
+            requests: 1,
+            period_seconds: 1,
+        });
+        let http = builder.build()?;
 
         let mut ctx = Self::new();
         ctx.aggregator.register_identifier(Box::new(

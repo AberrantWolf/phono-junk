@@ -126,7 +126,7 @@ fn server_404_returns_not_found_status_for_ok_none_mapping() {
 fn missing_token_returns_missing_credential_error() {
     let provider = BarcodelookupProvider::new();
     let creds = Credentials::new();
-    match provider.lookup(&default_toc(), &ids_with_barcode("0123456789012"), &creds) {
+    match provider.lookup_many(&default_toc(), &ids_with_barcode("0123456789012"), &creds) {
         Err(ProviderError::MissingCredential("barcodelookup")) => {}
         other => panic!("expected MissingCredential(barcodelookup), got {other:?}"),
     }

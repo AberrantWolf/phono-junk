@@ -27,8 +27,9 @@ pub mod parse;
 use phono_junk_core::{DiscIds, Toc};
 use phono_junk_identify::{
     AlbumMeta, AssetCandidate, AssetConfidence, AssetLookupCtx, AssetProvider, AssetType,
-    Credentials, DiscIdKind, HttpClient, HttpError, HttpResponse, IdentificationProvider,
-    ProviderError, ProviderResult, ReleaseMeta, TrackMeta,
+    Credentials, DiscIdKind, HostRatePolicy, HttpClient, HttpError, HttpResponse,
+    IdentificationProvider, ProviderDescriptor, ProviderError, ProviderLookup, ProviderResult,
+    ProviderTier, ReleaseCandidate, ReleaseMeta, TrackMeta,
 };
 use url::Url;
 
@@ -36,6 +37,21 @@ use crate::cache::{CacheKind, ResponseCache};
 use crate::parse::ReleaseDetail;
 
 const PROVIDER: &str = "tower";
+
+pub const DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
+    name: PROVIDER,
+    tier: ProviderTier::MusicFallback,
+    required_ids: &[DiscIdKind::Barcode, DiscIdKind::CatalogNumber],
+    emitted_ids: &[DiscIdKind::Barcode, DiscIdKind::CatalogNumber],
+    identifies: true,
+    supplies_assets: true,
+    required_credential: None,
+    host_rate_policy: Some(HostRatePolicy {
+        host: "mdb.tower.jp",
+        requests: 1,
+        period_seconds: 2,
+    }),
+};
 const DEFAULT_BASE_URL: &str = "https://mdb.tower.jp";
 
 /// Tower Records MDB provider. Implements both [`IdentificationProvider`]
@@ -183,20 +199,30 @@ impl IdentificationProvider for TowerProvider {
         PROVIDER
     }
 
-    fn supported_ids(&self) -> &[DiscIdKind] {
+    fn supported_ids(&self) -> &'static [DiscIdKind] {
         &[DiscIdKind::Barcode, DiscIdKind::CatalogNumber]
     }
 
-    fn lookup(
+    fn descriptor(&self) -> ProviderDescriptor {
+        DESCRIPTOR
+    }
+
+    fn lookup_many(
         &self,
         _toc: &Toc,
         ids: &DiscIds,
         _creds: &Credentials,
-    ) -> Result<Option<ProviderResult>, ProviderError> {
+    ) -> Result<ProviderLookup, ProviderError> {
         let Some(detail) = self.identify_via_search(ids)? else {
-            return Ok(None);
+            return Ok(ProviderLookup::default());
         };
-        Ok(Some(result_from_detail(detail)))
+        let release_candidates = ReleaseCandidate::from_result(result_from_detail(detail))
+            .into_iter()
+            .collect();
+        Ok(ProviderLookup {
+            release_candidates,
+            ..ProviderLookup::default()
+        })
     }
 }
 
@@ -205,7 +231,11 @@ impl AssetProvider for TowerProvider {
         PROVIDER
     }
 
-    fn asset_types(&self) -> &[AssetType] {
+    fn descriptor(&self) -> ProviderDescriptor {
+        DESCRIPTOR
+    }
+
+    fn asset_types(&self) -> &'static [AssetType] {
         &[AssetType::FrontCover]
     }
 
@@ -363,7 +393,7 @@ mod lib_tests {
         };
         let p = TowerProvider::new();
         let creds = Credentials::new();
-        let err = p.lookup(&toc, &ids, &creds).unwrap_err();
+        let err = p.lookup_many(&toc, &ids, &creds).unwrap_err();
         assert!(matches!(err, ProviderError::Other(_)));
     }
 
@@ -378,7 +408,12 @@ mod lib_tests {
         let ids = DiscIds::default();
         let p = TowerProvider::new();
         let creds = Credentials::new();
-        assert!(p.lookup(&toc, &ids, &creds).unwrap().is_none());
+        assert!(
+            p.lookup_many(&toc, &ids, &creds)
+                .unwrap()
+                .release_candidates
+                .is_empty()
+        );
     }
 
     #[test]

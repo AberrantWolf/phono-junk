@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use phono_junk_lib::PhonoContext;
-use rusqlite::Connection;
+use phono_junk_lib::{LibrarySession, PhonoContext};
 
 use crate::error::CliError;
 
@@ -24,8 +24,7 @@ impl OutputFormat {
 }
 
 pub struct CliEnv {
-    pub conn: Connection,
-    pub ctx: PhonoContext,
+    pub session: LibrarySession,
     #[allow(dead_code)]
     pub fmt: OutputFormat,
     #[allow(dead_code)]
@@ -76,7 +75,6 @@ pub fn open_env(
     {
         std::fs::create_dir_all(parent)?;
     }
-    let conn = phono_junk_db::open_database(&db_path)?;
     let ctx = if need_network {
         let ctx = PhonoContext::with_default_providers(resolve_user_agent(ua_flag))?;
         overlay_env_credentials(&ctx);
@@ -89,9 +87,9 @@ pub fn open_env(
         overlay_env_credentials(&ctx);
         ctx
     };
+    let session = LibrarySession::open(db_path.clone(), Arc::new(ctx))?;
     Ok(CliEnv {
-        conn,
-        ctx,
+        session,
         fmt,
         db_path,
     })

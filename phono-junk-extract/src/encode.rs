@@ -24,6 +24,13 @@ const CD_SAMPLE_RATE: u32 = 44_100;
 const CD_BITS_PER_SAMPLE: u32 = 16;
 const CD_CHANNELS: u32 = 2;
 
+/// Already-validated artwork passed to the FLAC metadata writer.
+#[derive(Debug, Clone, Copy)]
+pub struct EmbeddedPicture<'a> {
+    pub mime_type: &'a str,
+    pub bytes: &'a [u8],
+}
+
 /// Encode a track's PCM stream to `out_path` and attach tags + optional cover.
 ///
 /// The PCM iterator yields one CDDA sector (588 stereo samples packed as
@@ -32,13 +39,13 @@ const CD_CHANNELS: u32 = 2;
 /// without scanning to EOF; this is the value returned by
 /// `TrackPcmReader::total_samples`.
 ///
-/// `cover_jpeg` is the raw JPEG bytes for the front cover (picture type 3).
+/// `cover` contains validated image bytes and their detected MIME type.
 /// Pass `None` to skip the picture block.
 pub fn encode_flac_track(
     pcm: impl Iterator<Item = Result<PcmSector, AnalysisError>>,
     total_samples: u64,
     tags: &TrackTags,
-    cover_jpeg: Option<&[u8]>,
+    cover: Option<EmbeddedPicture<'_>>,
     out_path: &Path,
 ) -> Result<(), ExtractError> {
     if let Some(parent) = out_path.parent()
@@ -48,7 +55,7 @@ pub fn encode_flac_track(
     }
 
     encode_audio_stream(pcm, total_samples, out_path)?;
-    write_metadata(out_path, tags, cover_jpeg)?;
+    write_metadata(out_path, tags, cover)?;
     Ok(())
 }
 
@@ -98,7 +105,7 @@ fn encode_audio_stream(
 fn write_metadata(
     out_path: &Path,
     tags: &TrackTags,
-    cover_jpeg: Option<&[u8]>,
+    cover: Option<EmbeddedPicture<'_>>,
 ) -> Result<(), ExtractError> {
     let mut tag = Tag::read_from_path(out_path)
         .map_err(|e| ExtractError::FlacMetadata(format!("read: {e}")))?;
@@ -108,8 +115,12 @@ fn write_metadata(
             vc.set(key, vec![value]);
         }
     }
-    if let Some(bytes) = cover_jpeg {
-        tag.add_picture("image/jpeg", PictureType::CoverFront, bytes.to_vec());
+    if let Some(cover) = cover {
+        tag.add_picture(
+            cover.mime_type,
+            PictureType::CoverFront,
+            cover.bytes.to_vec(),
+        );
     }
     tag.save()
         .map_err(|e| ExtractError::FlacMetadata(format!("save: {e}")))?;

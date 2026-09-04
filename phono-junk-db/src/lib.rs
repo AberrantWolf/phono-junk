@@ -6,12 +6,16 @@
 
 use thiserror::Error;
 
+pub mod aggregate;
 pub mod cache;
 pub mod crud;
+pub mod evidence;
 pub mod overrides;
 pub mod schema;
 
-pub use schema::{CURRENT_VERSION, SchemaError, create_schema, open_database, open_memory};
+pub use schema::{
+    CURRENT_VERSION, SchemaError, create_schema, open_database, open_memory, reset_database,
+};
 
 #[derive(Debug, Error)]
 pub enum DbError {

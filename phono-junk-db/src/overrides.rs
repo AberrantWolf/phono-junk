@@ -14,7 +14,7 @@
 //! Deeper nesting (`release[0].disc[1].track[2].title`) is deferred until a
 //! user workflow actually needs it; MVP overrides are flat corrections.
 
-use phono_junk_catalog::{Album, Disc, Override, Release, RipFile, Track};
+use phono_junk_catalog::{Album, Disc, Override, Release, Track};
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -113,7 +113,6 @@ pub enum OverrideTarget<'a> {
         tracks: &'a mut [Track],
     },
     Track(&'a mut Track),
-    RipFile(&'a mut RipFile),
 }
 
 /// Apply an override to the given target. `path` is the parsed `sub_path`;
@@ -129,7 +128,6 @@ pub fn apply_override(
         OverrideTarget::Release(release) => apply_flat_release(release, path, field, value),
         OverrideTarget::Disc { disc, tracks } => apply_disc(disc, tracks, path, field, value),
         OverrideTarget::Track(track) => apply_flat_track(track, path, field, value),
-        OverrideTarget::RipFile(file) => apply_flat_rip_file(file, path, field, value),
     }
 }
 
@@ -283,26 +281,6 @@ fn apply_flat_track(
         other => {
             return Err(OverrideError::UnknownField {
                 target: "Track",
-                field: other.to_string(),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn apply_flat_rip_file(
-    file: &mut RipFile,
-    path: &[Segment],
-    field: &str,
-    value: &str,
-) -> Result<(), OverrideError> {
-    reject_nonempty(path, "RipFile")?;
-    match field {
-        "accuraterip_status" => file.accuraterip_status = nullable(value),
-        "last_verified_at" => file.last_verified_at = nullable(value),
-        other => {
-            return Err(OverrideError::UnknownField {
-                target: "RipFile",
                 field: other.to_string(),
             });
         }

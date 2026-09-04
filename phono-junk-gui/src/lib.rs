@@ -1,7 +1,7 @@
 //! phono-junk GUI (egui/eframe).
 //!
 //! Follows retro-junk-gui's patterns verbatim: std::mpsc channel + background
-//! threads via `spawn_background_op`, `AppMessage` enum for worker→UI
+//! session-owned background jobs, `AppMessage` for one-shot UI work,
 //! communication, `BackgroundOperation` tracking for the activity bar.
 //!
 //! Diverges in two ways by design:

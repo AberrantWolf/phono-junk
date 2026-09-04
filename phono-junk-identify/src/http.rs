@@ -10,6 +10,7 @@
 //! request URL. Retries and backoff policy remain caller concerns.
 
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -267,6 +268,24 @@ impl HttpClientBuilder {
             Arc::new(RealBucket { limiter, clock }),
         );
         self
+    }
+
+    /// Register the quota declared by a provider descriptor. Provider crates
+    /// own policy; the application owns one shared scheduler/client.
+    pub fn host_rate_policy(self, policy: crate::HostRatePolicy) -> Self {
+        let requests = NonZeroU32::new(policy.requests)
+            .expect("provider rate policy must permit at least one request");
+        let quota = match policy.period_seconds {
+            1 => Quota::per_second(requests),
+            60 => Quota::per_minute(requests),
+            seconds => {
+                let interval = Duration::from_secs_f64(seconds as f64 / f64::from(policy.requests));
+                Quota::with_period(interval)
+                    .expect("provider rate policy period must be non-zero")
+                    .allow_burst(requests)
+            }
+        };
+        self.host_quota(policy.host, quota)
     }
 
     /// Test-only: register a host with a fake clock, and (critically) swap the

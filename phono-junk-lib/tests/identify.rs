@@ -7,8 +7,8 @@ use phono_junk_core::{DiscIds, Toc};
 use phono_junk_db::{crud, open_memory};
 use phono_junk_identify::{
     AlbumMeta, AssetCandidate, AssetConfidence, AssetLookupCtx, AssetProvider, AssetType,
-    Credentials, DiscIdKind, IdentificationProvider, ProviderError, ProviderResult, ReleaseMeta,
-    TrackMeta,
+    Credentials, DiscIdKind, IdentificationProvider, ProviderError, ProviderLookup, ProviderResult,
+    ReleaseCandidate, ReleaseMeta, TrackMeta,
 };
 use phono_junk_lib::PhonoContext;
 use rusqlite::Connection;
@@ -26,16 +26,24 @@ impl IdentificationProvider for MockIdentifier {
     fn name(&self) -> &'static str {
         self.name
     }
-    fn supported_ids(&self) -> &[DiscIdKind] {
+    fn supported_ids(&self) -> &'static [DiscIdKind] {
         &[DiscIdKind::MbDiscId]
     }
-    fn lookup(
+    fn lookup_many(
         &self,
         _toc: &Toc,
         _ids: &DiscIds,
         _creds: &Credentials,
-    ) -> Result<Option<ProviderResult>, ProviderError> {
-        Ok(self.result.clone())
+    ) -> Result<ProviderLookup, ProviderError> {
+        Ok(ProviderLookup {
+            release_candidates: self
+                .result
+                .clone()
+                .and_then(ReleaseCandidate::from_result)
+                .into_iter()
+                .collect(),
+            ..ProviderLookup::default()
+        })
     }
 }
 
@@ -48,17 +56,25 @@ impl IdentificationProvider for CountingMock {
     fn name(&self) -> &'static str {
         self.name
     }
-    fn supported_ids(&self) -> &[DiscIdKind] {
+    fn supported_ids(&self) -> &'static [DiscIdKind] {
         &[DiscIdKind::MbDiscId]
     }
-    fn lookup(
+    fn lookup_many(
         &self,
         _toc: &Toc,
         _ids: &DiscIds,
         _creds: &Credentials,
-    ) -> Result<Option<ProviderResult>, ProviderError> {
+    ) -> Result<ProviderLookup, ProviderError> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(self.result.clone())
+        Ok(ProviderLookup {
+            release_candidates: self
+                .result
+                .clone()
+                .and_then(ReleaseCandidate::from_result)
+                .into_iter()
+                .collect(),
+            ..ProviderLookup::default()
+        })
     }
 }
 
@@ -70,7 +86,7 @@ impl AssetProvider for MockAssetProvider {
     fn name(&self) -> &'static str {
         self.name
     }
-    fn asset_types(&self) -> &[AssetType] {
+    fn asset_types(&self) -> &'static [AssetType] {
         &[AssetType::FrontCover]
     }
     fn lookup_art(&self, _ctx: &AssetLookupCtx<'_>) -> Result<Vec<AssetCandidate>, ProviderError> {
@@ -254,15 +270,15 @@ fn identify_persists_humanized_provider_errors() {
         fn name(&self) -> &'static str {
             "MusicBrainz"
         }
-        fn supported_ids(&self) -> &[DiscIdKind] {
+        fn supported_ids(&self) -> &'static [DiscIdKind] {
             &[DiscIdKind::MbDiscId]
         }
-        fn lookup(
+        fn lookup_many(
             &self,
             _toc: &Toc,
             _ids: &DiscIds,
             _creds: &Credentials,
-        ) -> Result<Option<ProviderResult>, ProviderError> {
+        ) -> Result<ProviderLookup, ProviderError> {
             Err(ProviderError::Network("connection refused".into()))
         }
     }
@@ -282,6 +298,7 @@ fn identify_persists_humanized_provider_errors() {
             identification_source: None,
             accuraterip_status: None,
             last_verified_at: None,
+            inferred_sample_shift: None,
             last_identify_errors: None,
             last_identify_at: None,
             provenance: None,
@@ -328,6 +345,7 @@ fn unidentified_marks_rip_file_without_creating_album() {
             identification_source: None,
             accuraterip_status: None,
             last_verified_at: None,
+            inferred_sample_shift: None,
             last_identify_errors: None,
             last_identify_at: None,
             provenance: None,
@@ -424,6 +442,7 @@ fn pre_existing_override_wins_over_consensus_on_persist() {
             id: 0,
             entity_type: "Album".into(),
             entity_id: album_id,
+            entity_key: None,
             sub_path: None,
             field: "title".into(),
             override_value: "User-Corrected".into(),
@@ -496,6 +515,7 @@ fn override_does_not_mark_disagreement_resolved() {
             id: 0,
             entity_type: "Album".into(),
             entity_id: album_id,
+            entity_key: None,
             sub_path: None,
             field: "title".into(),
             override_value: "Overridden".into(),
@@ -548,6 +568,83 @@ fn assets_inserted_for_release_and_deduped_across_providers() {
         assets[0].source_url.as_deref(),
         Some("https://example.com/cover.jpg")
     );
+}
+
+#[test]
+fn refresh_preserves_track_and_asset_projection_ids_and_records_evidence() {
+    let conn = open_conn();
+    let mut ctx = context_with_identifier(MockIdentifier {
+        name: "musicbrainz",
+        result: Some(mb_result()),
+    });
+    ctx.aggregator
+        .register_asset_provider(Box::new(MockAssetProvider {
+            name: "asset-source",
+            candidates: vec![AssetCandidate {
+                provider: "asset-source".into(),
+                asset_type: AssetType::FrontCover,
+                source_url: Url::parse("https://example.test/front.jpg").unwrap(),
+                width: Some(1200),
+                height: Some(1200),
+                confidence: AssetConfidence::Exact,
+            }],
+        }));
+
+    let first = ctx
+        .identify_disc(&conn, &sample_toc(), &sample_ids(), None, false)
+        .unwrap();
+    let disc_id = first.disc_id.unwrap();
+    let release_id = first.release_id.unwrap();
+    let track_ids: Vec<_> = crud::list_tracks_for_disc(&conn, disc_id)
+        .unwrap()
+        .into_iter()
+        .map(|track| track.id)
+        .collect();
+    let asset_ids: Vec<_> = crud::list_assets_for_release(&conn, release_id)
+        .unwrap()
+        .into_iter()
+        .map(|asset| asset.id)
+        .collect();
+
+    ctx.identify_disc(&conn, &sample_toc(), &sample_ids(), None, true)
+        .unwrap();
+
+    assert_eq!(
+        crud::list_tracks_for_disc(&conn, disc_id)
+            .unwrap()
+            .into_iter()
+            .map(|track| track.id)
+            .collect::<Vec<_>>(),
+        track_ids
+    );
+    assert_eq!(
+        crud::list_assets_for_release(&conn, release_id)
+            .unwrap()
+            .into_iter()
+            .map(|asset| asset.id)
+            .collect::<Vec<_>>(),
+        asset_ids
+    );
+    let attempts: i64 = conn
+        .query_row("SELECT COUNT(*) FROM identification_attempts", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let observations: i64 = conn
+        .query_row("SELECT COUNT(*) FROM provider_observations", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let candidates: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM identification_candidates",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(attempts, 2);
+    assert_eq!(observations, 2);
+    assert_eq!(candidates, 2);
 }
 
 #[test]
@@ -689,6 +786,7 @@ fn identify_rolls_back_on_mid_pipeline_failure() {
             id: 0,
             entity_type: "Disc".into(),
             entity_id: disc_id,
+            entity_key: None,
             sub_path: Some("track[99]".into()),
             field: "title".into(),
             override_value: "\"bad\"".into(),

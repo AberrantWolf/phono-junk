@@ -1,38 +1,11 @@
-//! Aggregator-level tests: identify() merges via consensus, lookup_assets()
-//! dedupes, provider errors surface without poisoning the batch.
+//! Aggregator-level asset tests.
 
-use phono_junk_core::{DiscIds, Toc};
+use phono_junk_core::DiscIds;
 use phono_junk_identify::{
     Aggregator, AlbumMeta, AssetCandidate, AssetConfidence, AssetLookupCtx, AssetProvider,
-    AssetType, Credentials, DiscIdKind, IdentificationProvider, ProviderError, ProviderResult,
-    ReleaseMeta,
+    AssetType, Credentials, ProviderError, ReleaseMeta,
 };
 use url::Url;
-
-struct MockIdentifier {
-    name: &'static str,
-    outcome: Result<Option<ProviderResult>, &'static str>,
-}
-
-impl IdentificationProvider for MockIdentifier {
-    fn name(&self) -> &'static str {
-        self.name
-    }
-    fn supported_ids(&self) -> &[DiscIdKind] {
-        &[DiscIdKind::MbDiscId]
-    }
-    fn lookup(
-        &self,
-        _toc: &Toc,
-        _ids: &DiscIds,
-        _creds: &Credentials,
-    ) -> Result<Option<ProviderResult>, ProviderError> {
-        match &self.outcome {
-            Ok(r) => Ok(r.clone()),
-            Err(msg) => Err(ProviderError::Other((*msg).to_string())),
-        }
-    }
-}
 
 struct MockAssetProvider {
     name: &'static str,
@@ -43,27 +16,11 @@ impl AssetProvider for MockAssetProvider {
     fn name(&self) -> &'static str {
         self.name
     }
-    fn asset_types(&self) -> &[AssetType] {
+    fn asset_types(&self) -> &'static [AssetType] {
         &[AssetType::FrontCover]
     }
     fn lookup_art(&self, _ctx: &AssetLookupCtx<'_>) -> Result<Vec<AssetCandidate>, ProviderError> {
         Ok(self.candidates.clone())
-    }
-}
-
-fn default_toc() -> Toc {
-    Toc {
-        first_track: 1,
-        last_track: 1,
-        leadout_sector: 100,
-        track_offsets: vec![0],
-    }
-}
-
-fn discid_ids() -> DiscIds {
-    DiscIds {
-        mb_discid: Some("x".into()),
-        ..Default::default()
     }
 }
 
@@ -76,82 +33,6 @@ fn front_cover(provider: &'static str, url: &str) -> AssetCandidate {
         height: None,
         confidence: AssetConfidence::Exact,
     }
-}
-
-#[test]
-fn identify_merges_two_mock_providers() {
-    let mut agg = Aggregator::new();
-    agg.register_identifier(Box::new(MockIdentifier {
-        name: "a",
-        outcome: Ok(Some(ProviderResult {
-            album: Some(AlbumMeta {
-                title: Some("Shared Title".into()),
-                artist_credit: Some("Shared Artist".into()),
-                ..Default::default()
-            }),
-            provider: "a".into(),
-            ..Default::default()
-        })),
-    }));
-    agg.register_identifier(Box::new(MockIdentifier {
-        name: "b",
-        outcome: Ok(Some(ProviderResult {
-            album: Some(AlbumMeta {
-                title: Some("Shared Title".into()),
-                artist_credit: Some("Shared Artist".into()),
-                year: Some(2024),
-                ..Default::default()
-            }),
-            provider: "b".into(),
-            ..Default::default()
-        })),
-    }));
-    let outcome = agg.identify(&default_toc(), &discid_ids(), &Credentials::new());
-    assert!(outcome.any_match);
-    assert_eq!(outcome.merged.album.title.as_deref(), Some("Shared Title"));
-    assert_eq!(outcome.merged.album.year, Some(2024));
-    assert!(outcome.errors.is_empty());
-    assert!(outcome.merged.disagreements.is_empty());
-}
-
-#[test]
-fn identify_unmatched_returns_any_match_false() {
-    let mut agg = Aggregator::new();
-    agg.register_identifier(Box::new(MockIdentifier {
-        name: "a",
-        outcome: Ok(None),
-    }));
-    agg.register_identifier(Box::new(MockIdentifier {
-        name: "b",
-        outcome: Ok(None),
-    }));
-    let outcome = agg.identify(&default_toc(), &discid_ids(), &Credentials::new());
-    assert!(!outcome.any_match);
-    assert!(outcome.errors.is_empty());
-}
-
-#[test]
-fn identify_error_in_one_provider_surfaces_in_errors_list() {
-    let mut agg = Aggregator::new();
-    agg.register_identifier(Box::new(MockIdentifier {
-        name: "a",
-        outcome: Err("boom"),
-    }));
-    agg.register_identifier(Box::new(MockIdentifier {
-        name: "b",
-        outcome: Ok(Some(ProviderResult {
-            album: Some(AlbumMeta {
-                title: Some("Title".into()),
-                ..Default::default()
-            }),
-            provider: "b".into(),
-            ..Default::default()
-        })),
-    }));
-    let outcome = agg.identify(&default_toc(), &discid_ids(), &Credentials::new());
-    assert!(outcome.any_match, "b's Ok must still produce a match");
-    assert_eq!(outcome.errors.len(), 1);
-    assert_eq!(outcome.errors[0].0, "a");
 }
 
 #[test]

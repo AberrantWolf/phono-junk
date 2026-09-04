@@ -15,7 +15,7 @@ use junk_libs_core::AnalysisError;
 use junk_libs_disc::{PCM_SAMPLES_PER_SECTOR, PcmSector};
 use metaflac::Tag;
 use metaflac::block::{Block, PictureType};
-use phono_junk_extract::{TrackTags, encode_flac_track};
+use phono_junk_extract::{EmbeddedPicture, TrackTags, encode_flac_track};
 use tempfile::TempDir;
 
 /// Build an iterator of `n` sectors whose samples follow `f(i)` for the
@@ -67,7 +67,17 @@ fn silence_roundtrips_bit_exact_with_tags_and_cover() {
 
     let iter = sectors.into_iter().map(Ok::<PcmSector, AnalysisError>);
 
-    encode_flac_track(iter, total_samples, &tags, Some(&cover), &out).unwrap();
+    encode_flac_track(
+        iter,
+        total_samples,
+        &tags,
+        Some(EmbeddedPicture {
+            mime_type: "image/jpeg",
+            bytes: &cover,
+        }),
+        &out,
+    )
+    .unwrap();
 
     let mut reader = FlacReader::open(&out).unwrap();
     let info = reader.streaminfo();
@@ -139,7 +149,17 @@ fn tags_and_picture_land_in_output_file() {
     let tags = sample_tags();
 
     let iter = sectors.into_iter().map(Ok::<PcmSector, AnalysisError>);
-    encode_flac_track(iter, total_samples, &tags, Some(&cover), &out).unwrap();
+    encode_flac_track(
+        iter,
+        total_samples,
+        &tags,
+        Some(EmbeddedPicture {
+            mime_type: "image/jpeg",
+            bytes: &cover,
+        }),
+        &out,
+    )
+    .unwrap();
 
     let tag = Tag::read_from_path(&out).unwrap();
     let vc = tag.vorbis_comments().expect("vorbis comment block present");

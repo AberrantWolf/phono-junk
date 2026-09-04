@@ -3,11 +3,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc;
 
-use phono_junk_db::crud;
-use phono_junk_lib::PhonoContext;
 use phono_junk_lib::env::{default_asset_cache_dir, default_db_path, default_user_agent};
-use phono_junk_lib::list::{ListEntry, ListFilters, SortDir, SortKey, load_list_entries};
-use rusqlite::Connection;
+use phono_junk_lib::list::{ListEntry, ListFilters, SortDir, SortKey};
+use phono_junk_lib::{JobEventKind, LibrarySession, PhonoContext};
 
 use crate::state::{AppMessage, BackgroundOperation, DetailCache, EntryKey, handle_message};
 use crate::{views, widgets};
@@ -15,7 +13,7 @@ use crate::{views, widgets};
 pub struct PhonoApp {
     /// Open catalog DB. `None` until the user picks a file.
     pub db_path: Option<PathBuf>,
-    pub db_conn: Option<Connection>,
+    pub session: Option<LibrarySession>,
 
     /// All entries loaded from the DB — identified albums and
     /// unidentified rip files interleaved. Filtered client-side by
@@ -121,7 +119,7 @@ impl PhonoApp {
         };
         Self {
             db_path: None,
-            db_conn: None,
+            session: None,
             list_entries: Vec::new(),
             list_filters: ListFilters::default(),
             filter_year_text: String::new(),
@@ -189,9 +187,9 @@ impl PhonoApp {
         // schema bump) so the user can use the Reset DB button to recover
         // without having to re-locate the file by hand.
         self.db_path = Some(path.clone());
-        match phono_junk_db::open_database(&path) {
-            Ok(conn) => {
-                self.db_conn = Some(conn);
+        match LibrarySession::open(&path, self.phono_ctx.clone()) {
+            Ok(session) => {
+                self.session = Some(session);
                 self.reload_rows();
                 self.rescan_tracked_folders();
             }
@@ -213,29 +211,15 @@ impl PhonoApp {
             self.load_error = Some("reset: no database is open".into());
             return;
         };
-        // Drop the connection so file handles are released before unlink
-        // (matters on Windows; no-op on POSIX but harmless).
-        self.db_conn = None;
-
-        for suffix in ["", "-wal", "-shm"] {
-            let p = if suffix.is_empty() {
-                path.clone()
-            } else {
-                let mut s = path.as_os_str().to_owned();
-                s.push(suffix);
-                PathBuf::from(s)
-            };
-            if p.exists()
-                && let Err(e) = std::fs::remove_file(&p)
-            {
-                self.load_error = Some(format!("reset: remove {}: {e}", p.display()));
-                return;
-            }
-        }
-
-        match phono_junk_db::open_database(&path) {
-            Ok(conn) => {
-                self.db_conn = Some(conn);
+        let reset_result = if let Some(session) = self.session.as_mut() {
+            session.reset_database()
+        } else {
+            LibrarySession::rebuild(&path, self.phono_ctx.clone()).map(|session| {
+                self.session = Some(session);
+            })
+        };
+        match reset_result {
+            Ok(()) => {
                 self.list_entries.clear();
                 self.selected.clear();
                 self.selection_anchor = None;
@@ -262,10 +246,10 @@ impl PhonoApp {
     /// `library_folders` table — the user can remove them explicitly
     /// later. We deliberately don't purge on one failed scan.
     pub fn rescan_tracked_folders(&mut self) {
-        let Some(conn) = self.db_conn.as_ref() else {
+        let Some(session) = self.session.as_ref() else {
             return;
         };
-        let folders = match crud::list_library_folders(conn) {
+        let folders = match session.tracked_folders() {
             Ok(f) => f,
             Err(e) => {
                 log::warn!("auto-rescan: list_library_folders: {e}");
@@ -288,10 +272,10 @@ impl PhonoApp {
     /// background op posts [`AppMessage::LibraryChanged`] and from the
     /// "Refresh" toolbar button. Prunes stale selection keys.
     pub fn reload_rows(&mut self) {
-        let Some(conn) = self.db_conn.as_ref() else {
+        let Some(session) = self.session.as_ref() else {
             return;
         };
-        match load_list_entries(conn) {
+        match session.list_entries() {
             Ok(entries) => {
                 let valid: HashSet<EntryKey> = entries
                     .iter()
@@ -332,6 +316,61 @@ impl eframe::App for PhonoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         while let Ok(msg) = self.message_rx.try_recv() {
             handle_message(self, msg, ctx);
+        }
+        if let Some(session) = self.session.as_ref() {
+            let generation = session.generation();
+            let events = session.supervisor().try_events();
+            for event in events {
+                if event.session_generation != generation {
+                    continue;
+                }
+                match event.kind {
+                    JobEventKind::LibraryChanged => self.reload_rows(),
+                    JobEventKind::Failed { error } => self.load_error = Some(error),
+                    JobEventKind::AssetCached { asset_id, bytes } => {
+                        let matches_focus =
+                            self.detail_cache
+                                .as_ref()
+                                .is_some_and(|cache| match &cache.payload {
+                                    crate::state::DetailPayload::Album(detail) => detail
+                                        .releases
+                                        .iter()
+                                        .filter_map(|release| release.cover_asset.as_ref())
+                                        .any(|asset| asset.id == asset_id),
+                                    _ => false,
+                                });
+                        if matches_focus && let Some(cache) = self.detail_cache.as_mut() {
+                            cache.art_bytes = Some(bytes);
+                            cache.art_loading = false;
+                            cache.art_error = None;
+                        }
+                    }
+                    JobEventKind::AssetCacheFailed { asset_id, error } => {
+                        let matches_focus =
+                            self.detail_cache
+                                .as_ref()
+                                .is_some_and(|cache| match &cache.payload {
+                                    crate::state::DetailPayload::Album(detail) => detail
+                                        .releases
+                                        .iter()
+                                        .filter_map(|release| release.cover_asset.as_ref())
+                                        .any(|asset| asset.id == asset_id),
+                                    _ => false,
+                                });
+                        if matches_focus && let Some(cache) = self.detail_cache.as_mut() {
+                            cache.art_loading = false;
+                            cache.art_error = Some(error);
+                        }
+                    }
+                    JobEventKind::Finished => {
+                        self.status_message = Some(format!("job {} complete", event.job_id.0));
+                    }
+                    JobEventKind::Cancelled => {
+                        self.status_message = Some(format!("job {} cancelled", event.job_id.0));
+                    }
+                    JobEventKind::Started { .. } | JobEventKind::Progress { .. } => {}
+                }
+            }
         }
 
         // Single poll per frame: catches natural end-of-track, audio
@@ -383,7 +422,7 @@ mod tests {
     use super::*;
     use phono_junk_catalog::{Album, RipFile};
     use phono_junk_core::{IdentificationConfidence, IdentificationState};
-    use phono_junk_db::{crud, open_memory};
+    use phono_junk_db::crud;
 
     fn insert_album(conn: &rusqlite::Connection, title: &str) -> phono_junk_catalog::Id {
         crud::insert_album(
@@ -418,6 +457,7 @@ mod tests {
                 identification_source: None,
                 accuraterip_status: None,
                 last_verified_at: None,
+                inferred_sample_shift: None,
                 last_identify_errors: None,
                 last_identify_at: None,
                 provenance: None,
@@ -430,12 +470,13 @@ mod tests {
 
     #[test]
     fn reload_rows_prunes_stale_selection_of_both_kinds() {
-        let conn = open_memory().unwrap();
-        let album_id = insert_album(&conn, "A");
-        let rip_id = insert_unidentified_rip(&conn, "/tmp/a.cue");
-
         let mut app = PhonoApp::new();
-        app.db_conn = Some(conn);
+        let temp = tempfile::tempdir().unwrap();
+        let session =
+            LibrarySession::open(temp.path().join("library.db"), app.phono_ctx.clone()).unwrap();
+        let album_id = insert_album(session.connection(), "A");
+        let rip_id = insert_unidentified_rip(session.connection(), "/tmp/a.cue");
+        app.session = Some(session);
         app.selected.insert(EntryKey::Album(album_id));
         app.selected.insert(EntryKey::RipFile(rip_id));
         app.selected.insert(EntryKey::Album(999_999));

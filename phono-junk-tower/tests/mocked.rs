@@ -65,13 +65,17 @@ fn lookup_round_trips_search_and_release() {
         TowerProvider::with_client_and_cache(client(), cache).with_base_url(server.base_url());
 
     let result = provider
-        .lookup(
+        .lookup_many(
             &toc_stub(),
             &ids_with_barcode("075992665629"),
             &Credentials::new(),
         )
         .unwrap()
-        .expect("fixture release should be returned");
+        .release_candidates
+        .into_iter()
+        .next()
+        .expect("fixture release should be returned")
+        .into_provider_result();
 
     assert_eq!(result.provider, "tower");
     let album = result.album.as_ref().expect("album meta present");
@@ -150,7 +154,7 @@ fn cache_absorbs_second_call() {
 
     // First call — fills the cache.
     provider
-        .lookup(
+        .lookup_many(
             &toc_stub(),
             &ids_with_barcode("075992665629"),
             &Credentials::new(),
@@ -158,7 +162,7 @@ fn cache_absorbs_second_call() {
         .unwrap();
     // Second call — should not hit the network at all.
     provider
-        .lookup(
+        .lookup_many(
             &toc_stub(),
             &ids_with_barcode("075992665629"),
             &Credentials::new(),
@@ -181,11 +185,11 @@ fn empty_search_results_yields_ok_none() {
     });
     let provider = TowerProvider::with_client(client()).with_base_url(server.base_url());
     let r = provider
-        .lookup(
+        .lookup_many(
             &toc_stub(),
             &ids_with_barcode("0000000000000"),
             &Credentials::new(),
         )
         .unwrap();
-    assert!(r.is_none());
+    assert!(r.release_candidates.is_empty());
 }

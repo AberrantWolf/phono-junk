@@ -76,7 +76,16 @@ pub struct Label {
 #[derive(Debug, Deserialize)]
 pub struct Medium {
     #[serde(default)]
+    pub position: Option<u8>,
+    #[serde(default)]
+    pub discs: Vec<DiscRef>,
+    #[serde(default)]
     pub tracks: Vec<Track>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DiscRef {
+    pub id: String,
 }
 
 #[derive(Debug, Deserialize)]

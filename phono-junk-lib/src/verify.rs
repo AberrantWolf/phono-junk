@@ -1,24 +1,29 @@
 //! Verify pipeline: [`PhonoContext::verify_disc`].
 //!
 //! Computes per-track AccurateRip CRCs from the rip's BIN/CHD, fetches
-//! the matching dBAR file, compares, and persists the summary on the
-//! `RipFile` row. Identification is *not* re-run — see CLAUDE.md's
+//! the matching dBAR file, compares, and persists an append-only evidence
+//! run. Identification is *not* re-run — see CLAUDE.md's
 //! identification-vs-verification split.
 
 use std::path::PathBuf;
 
 use chrono::Utc;
-use junk_libs_disc::{TrackKind, TrackLayout};
+use junk_libs_disc::{TrackKind, TrackLayout, TrackPcmReader};
 use phono_junk_accuraterip::{
-    AccurateRipError, TrackCrc, TrackPosition, TrackVerification, track_crc_from_chd,
-    track_crc_from_cue, verify_disc as verify_disc_against_dbar,
+    AccurateRipError, ChecksumVersion, DiscTrackSamples, TrackPosition, TrackVerification,
+    TrackVerificationStatus, VerificationOptions, VerificationStatus, track_crc_samples,
+    verify_with_offsets,
 };
 use phono_junk_catalog::{Disc, Id, RipFile};
 use phono_junk_core::DiscIds;
-use phono_junk_db::{DbError, crud};
+use phono_junk_db::{
+    DbError, crud,
+    evidence::{self, NewDbarResponse, NewTrackVerification},
+};
 use phono_junk_identify::HttpError;
 use rusqlite::Connection;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::PhonoContext;
 
@@ -61,6 +66,9 @@ pub struct VerifySummary {
     pub mismatched: usize,
     pub not_in_db: bool,
     pub max_confidence: u8,
+    pub inferred_sample_shift: Option<i32>,
+    pub ripper_read_offset: Option<i32>,
+    pub ambiguous_offsets: Vec<i32>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -92,8 +100,8 @@ pub enum VerifyError {
 }
 
 impl PhonoContext {
-    /// Verify one disc against AccurateRip. Persists a compact status
-    /// string + timestamp to the linked `RipFile` row on success.
+    /// Verify one disc against AccurateRip. Persists structured run and
+    /// per-track evidence; display summaries are derived on read.
     ///
     /// Returns a [`VerifySummary`] whose `not_in_db == true` case is *not*
     /// an error — it's a legitimate "we looked, AccurateRip has no
@@ -102,6 +110,15 @@ impl PhonoContext {
         &self,
         conn: &Connection,
         target: VerifyTarget,
+    ) -> Result<VerifySummary, VerifyError> {
+        self.verify_disc_with_options(conn, target, VerificationOptions::default())
+    }
+
+    pub fn verify_disc_with_options(
+        &self,
+        conn: &Connection,
+        target: VerifyTarget,
+        options: VerificationOptions,
     ) -> Result<VerifySummary, VerifyError> {
         let client = self
             .accuraterip
@@ -119,34 +136,68 @@ impl PhonoContext {
             return Err(VerifyError::NoRipSource(rip_file.id));
         }
         let track_count = audio_layouts.len() as u8;
+        let pcm = load_disc_pcm(&rip_file, &audio_layouts)?;
 
-        let dbar = client.fetch_dbar(&ids, track_count)?;
-        let Some(dbar) = dbar else {
-            persist_verification(conn, &rip_file, "not in accuraterip db", &[])?;
+        // Network activity is complete before any evidence write begins.
+        let fetched = client.fetch_dbar_evidence(&ids, track_count)?;
+        let ripper_read_offset = rip_file
+            .provenance
+            .as_ref()
+            .and_then(|provenance| provenance.read_offset);
+        let disc_stable_key = crud::catalog_entity_key(conn, "disc", disc.id)?;
+        let Some(fetched) = fetched else {
+            let run_id = evidence::start_verification_run(
+                conn,
+                rip_file.id,
+                None,
+                options.max_sample_shift,
+                ripper_read_offset,
+            )?;
+            let tracks = no_data_tracks(&pcm);
+            for track in &tracks {
+                persist_track_verification(conn, run_id, track)?;
+            }
+            evidence::finish_verification_run(conn, run_id, "no_data", None, None)?;
             return Ok(VerifySummary {
                 disc_id: disc.id,
                 rip_file_id: rip_file.id,
-                per_track: Vec::new(),
+                per_track: tracks.iter().map(VerifiedTrack::from).collect(),
                 accurate: 0,
                 mismatched: 0,
                 not_in_db: true,
                 max_confidence: 0,
+                inferred_sample_shift: None,
+                ripper_read_offset,
+                ambiguous_offsets: Vec::new(),
             });
         };
 
-        let mut computed: Vec<(u8, TrackCrc)> = Vec::with_capacity(audio_layouts.len());
-        for (i, layout) in audio_layouts.iter().enumerate() {
-            let position = track_position(i, audio_layouts.len());
-            let crc = compute_track_crc(&rip_file, layout, position)?;
-            computed.push((layout.number, crc));
-        }
+        let acquired_at = Utc::now().to_rfc3339();
+        let body_hash = format!("{:x}", Sha256::digest(&fetched.body));
+        let dbar_id = evidence::insert_dbar_response(
+            conn,
+            &NewDbarResponse {
+                disc_stable_key: &disc_stable_key,
+                body_hash: &body_hash,
+                body: &fetched.body,
+                acquired_at: &acquired_at,
+            },
+        )?;
+        let run_id = evidence::start_verification_run(
+            conn,
+            rip_file.id,
+            Some(dbar_id),
+            options.max_sample_shift,
+            ripper_read_offset,
+        )?;
 
-        let verifications = verify_disc_against_dbar(&dbar, &computed);
+        let verification = verify_with_offsets(&fetched.dbar, &pcm, options);
+        let verifications = &verification.tracks;
 
         let mut accurate = 0;
         let mut mismatched = 0;
         let mut max_confidence: u8 = 0;
-        for v in &verifications {
+        for v in verifications {
             if v.is_verified() {
                 accurate += 1;
                 if let Some(c) = v.best_confidence() {
@@ -157,8 +208,41 @@ impl PhonoContext {
             }
         }
 
-        let status_str = format_status(&verifications);
-        persist_verification(conn, &rip_file, &status_str, &verifications)?;
+        for track in verifications {
+            persist_track_verification(conn, run_id, track)?;
+        }
+        let ambiguous_offsets: Vec<i32> = verification
+            .ambiguous_offsets
+            .iter()
+            .map(|candidate| candidate.sample_shift)
+            .collect();
+        let ambiguous_json = (!ambiguous_offsets.is_empty())
+            .then(|| {
+                serde_json::to_string(
+                    &verification
+                        .ambiguous_offsets
+                        .iter()
+                        .map(|candidate| {
+                            serde_json::json!({
+                                "sample_shift": candidate.sample_shift,
+                                "full_matches": candidate.full_matches,
+                                "minimum_confidence": candidate.minimum_confidence,
+                                "total_confidence": candidate.total_confidence,
+                                "frame_450_matches": candidate.frame_450_matches,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .transpose()
+            .map_err(|error| DbError::Migration(error.to_string()))?;
+        evidence::finish_verification_run(
+            conn,
+            run_id,
+            verification_status(verification.status),
+            verification.chosen_sample_shift,
+            ambiguous_json.as_deref(),
+        )?;
 
         Ok(VerifySummary {
             disc_id: disc.id,
@@ -168,7 +252,35 @@ impl PhonoContext {
             mismatched,
             not_in_db: false,
             max_confidence,
+            inferred_sample_shift: verification.chosen_sample_shift,
+            ripper_read_offset,
+            ambiguous_offsets,
         })
+    }
+}
+
+fn no_data_tracks(tracks: &[DiscTrackSamples]) -> Vec<TrackVerification> {
+    tracks
+        .iter()
+        .enumerate()
+        .map(|(index, track)| TrackVerification {
+            position: track.position,
+            computed: track_crc_samples(&track.samples, track_position(index, tracks.len())),
+            v1_matches: Vec::new(),
+            v2_matches: Vec::new(),
+            sample_shift: None,
+            frame_450_support: false,
+            status: TrackVerificationStatus::NoData,
+        })
+        .collect()
+}
+
+fn track_position(index: usize, count: usize) -> TrackPosition {
+    match (index, count) {
+        (_, 1) => TrackPosition::Only,
+        (0, _) => TrackPosition::First,
+        (index, count) if index + 1 == count => TrackPosition::Last,
+        _ => TrackPosition::Middle,
     }
 }
 
@@ -217,45 +329,77 @@ fn load_layouts(rip: &RipFile) -> Result<Vec<TrackLayout>, VerifyError> {
     Err(VerifyError::NoRipSource(rip.id))
 }
 
-fn track_position(i: usize, n: usize) -> TrackPosition {
-    match (i, n) {
-        (_, 1) => TrackPosition::Only,
-        (0, _) => TrackPosition::First,
-        (idx, len) if idx + 1 == len => TrackPosition::Last,
-        _ => TrackPosition::Middle,
-    }
-}
-
-fn compute_track_crc(
+fn load_disc_pcm(
     rip: &RipFile,
-    layout: &TrackLayout,
-    position: TrackPosition,
-) -> Result<TrackCrc, VerifyError> {
-    if let Some(chd) = rip.chd_path.as_ref() {
-        return Ok(track_crc_from_chd(chd, layout.number, position)?);
+    layouts: &[&TrackLayout],
+) -> Result<Vec<DiscTrackSamples>, VerifyError> {
+    let mut tracks = Vec::with_capacity(layouts.len());
+    for layout in layouts {
+        let reader = if let Some(chd) = rip.chd_path.as_ref() {
+            TrackPcmReader::from_chd(chd, layout.number)?
+        } else if let Some(cue) = rip.cue_path.as_ref() {
+            TrackPcmReader::from_cue(cue, layout.number)?
+        } else {
+            return Err(VerifyError::NoRipSource(rip.id));
+        };
+        let mut samples = Vec::new();
+        for sector in reader {
+            samples.extend_from_slice(&sector?);
+        }
+        tracks.push(DiscTrackSamples {
+            position: layout.number,
+            samples,
+        });
     }
-    if let Some(cue) = rip.cue_path.as_ref() {
-        return Ok(track_crc_from_cue(cue, layout.number, position)?);
-    }
-    Err(VerifyError::NoRipSource(rip.id))
+    Ok(tracks)
 }
 
-fn format_status(vs: &[TrackVerification]) -> String {
-    let mut parts: Vec<String> = Vec::with_capacity(vs.len());
-    for v in vs {
-        parts.push(format!("{}:{}", v.position, v.status_string()));
-    }
-    parts.join(", ")
-}
-
-fn persist_verification(
+fn persist_track_verification(
     conn: &Connection,
-    rip: &RipFile,
-    status: &str,
-    _verifications: &[TrackVerification],
+    run_id: i64,
+    track: &TrackVerification,
 ) -> Result<(), DbError> {
-    let mut updated = rip.clone();
-    updated.accuraterip_status = Some(status.to_string());
-    updated.last_verified_at = Some(Utc::now().to_rfc3339());
-    crud::update_rip_file(conn, &updated)
+    let best = track.best_match();
+    evidence::insert_track_verification(
+        conn,
+        run_id,
+        &NewTrackVerification {
+            track_position: track.position,
+            computed_v1: track.computed.v1,
+            computed_v2: track.computed.v2,
+            matched_checksum: best.map(|matched| matched.checksum),
+            checksum_version: best.map(|matched| checksum_version(matched.version)),
+            sample_shift: track.sample_shift,
+            confidence: best.map(|matched| matched.confidence),
+            response_index: best.map(|matched| matched.pressing),
+            frame_450_support: track.frame_450_support,
+            status: track_status(track.status),
+        },
+    )
+}
+
+fn checksum_version(version: ChecksumVersion) -> &'static str {
+    match version {
+        ChecksumVersion::V1 => "v1",
+        ChecksumVersion::V2 => "v2",
+        ChecksumVersion::Both => "both",
+    }
+}
+
+fn track_status(status: TrackVerificationStatus) -> &'static str {
+    match status {
+        TrackVerificationStatus::Verified => "verified",
+        TrackVerificationStatus::Mismatched => "mismatched",
+        TrackVerificationStatus::NoData => "no_data",
+        TrackVerificationStatus::Ambiguous => "ambiguous",
+    }
+}
+
+fn verification_status(status: VerificationStatus) -> &'static str {
+    match status {
+        VerificationStatus::Verified => "verified",
+        VerificationStatus::Mismatched => "mismatched",
+        VerificationStatus::NoData => "no_data",
+        VerificationStatus::AmbiguousOffsets => "ambiguous_offsets",
+    }
 }

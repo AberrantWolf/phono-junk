@@ -92,7 +92,6 @@ fn seed_catalog(conn: &rusqlite::Connection) -> phono_junk_catalog::Id {
             cddb_id: None,
             ar_discid1: None,
             ar_discid2: None,
-            dbar_raw: None,
             mcn: None,
         },
     )
@@ -327,6 +326,7 @@ fn refresh_writes_provenance_when_row_had_none() {
             identification_source: None,
             accuraterip_status: None,
             last_verified_at: None,
+            inferred_sample_shift: None,
             last_identify_errors: None,
             last_identify_at: None,
             provenance: None,
@@ -403,6 +403,7 @@ fn refresh_preserves_existing_provenance() {
             identification_source: None,
             accuraterip_status: None,
             last_verified_at: None,
+            inferred_sample_shift: None,
             last_identify_errors: None,
             last_identify_at: None,
             provenance: Some(earlier.clone()),

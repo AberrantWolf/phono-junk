@@ -13,8 +13,8 @@
 //!     u32  cddb_id
 //!     TrackEntry[track_count] {
 //!         u8   confidence
-//!         u32  crc_v1
-//!         u32  crc_v2        // 0 for legacy submissions (pre-v2)
+//!         u32  checksum      // primary ARv1 or ARv2, not labelled
+//!         u32  checksum_450  // partial checksum used as offset evidence
 //!     }
 //! }
 //! ```
@@ -31,16 +31,18 @@ pub const HEADER_LEN: usize = 1 + 4 + 4 + 4;
 /// Track entry size in bytes: `u8 + u32 + u32`.
 pub const ENTRY_LEN: usize = 1 + 4 + 4;
 
-/// One expected-CRC entry: a submitter's v1/v2 pair with its agreement count.
+/// One dBAR track entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExpectedCrc {
-    /// Number of submitters whose rips produced this pair. Saturates
+pub struct ExpectedChecksum {
+    /// Number of submitters whose rips produced this checksum. Saturates
     /// around 200+; interpret per the AccurateRip.md rubric.
     pub confidence: u8,
-    pub v1: u32,
-    /// v2 is 0 for pre-v2 submissions — treat "0" as "no v2 value" when
-    /// matching, not as a real checksum of silence.
-    pub v2: u32,
+    /// The full-track checksum. The database does not say whether the
+    /// submitting client calculated ARv1 or ARv2.
+    pub checksum: u32,
+    /// A one-frame partial checksum around frame 450. This can support an
+    /// offset candidate, but can never verify a track by itself.
+    pub checksum_450: u32,
 }
 
 /// One Response block — a single pressing's worth of expected CRCs.
@@ -51,7 +53,7 @@ pub struct DbarResponse {
     pub ar_id2: u32,
     pub cddb_id: u32,
     /// Per-track entries. `tracks.len() == track_count as usize`.
-    pub tracks: Vec<ExpectedCrc>,
+    pub tracks: Vec<ExpectedChecksum>,
 }
 
 /// A parsed dBAR file — all Responses stacked in submission order.
@@ -92,10 +94,14 @@ impl DbarFile {
             let mut tracks = Vec::with_capacity(tc);
             for _ in 0..tc {
                 let confidence = bytes[cur];
-                let v1 = read_u32_le(&bytes[cur + 1..cur + 5]);
-                let v2 = read_u32_le(&bytes[cur + 5..cur + 9]);
+                let checksum = read_u32_le(&bytes[cur + 1..cur + 5]);
+                let checksum_450 = read_u32_le(&bytes[cur + 5..cur + 9]);
                 cur += ENTRY_LEN;
-                tracks.push(ExpectedCrc { confidence, v1, v2 });
+                tracks.push(ExpectedChecksum {
+                    confidence,
+                    checksum,
+                    checksum_450,
+                });
             }
 
             responses.push(DbarResponse {
@@ -110,6 +116,31 @@ impl DbarFile {
         Ok(DbarFile { responses })
     }
 
+    /// Validate every response header against the disc that was requested.
+    /// A body routed from the wrong cache key must fail closed rather than be
+    /// used as verification evidence.
+    pub fn validate_request(
+        &self,
+        track_count: u8,
+        ar_id1: u32,
+        ar_id2: u32,
+        cddb_id: u32,
+    ) -> Result<(), AccurateRipError> {
+        for (index, response) in self.responses.iter().enumerate() {
+            if response.track_count != track_count
+                || response.ar_id1 != ar_id1
+                || response.ar_id2 != ar_id2
+                || response.cddb_id != cddb_id
+            {
+                return Err(AccurateRipError::Parse(format!(
+                    "response {index} header does not match request: expected {track_count:03}-{ar_id1:08x}-{ar_id2:08x}-{cddb_id:08x}, got {:03}-{:08x}-{:08x}-{:08x}",
+                    response.track_count, response.ar_id1, response.ar_id2, response.cddb_id
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Iterate every expected CRC for a given 1-indexed track position,
     /// across all pressings in the file. Yields `(pressing_index, entry)`
     /// pairs. Positions beyond a pressing's `track_count` are skipped
@@ -118,7 +149,7 @@ impl DbarFile {
     pub fn entries_for_track(
         &self,
         position: u8,
-    ) -> impl Iterator<Item = (usize, &ExpectedCrc)> + '_ {
+    ) -> impl Iterator<Item = (usize, &ExpectedChecksum)> + '_ {
         self.responses.iter().enumerate().filter_map(move |(i, r)| {
             if position == 0 || position > r.track_count {
                 None

@@ -354,7 +354,6 @@ fn seed_one_disc(db_path: &Path) -> (Id, Id, Id) {
             cddb_id: None,
             ar_discid1: None,
             ar_discid2: None,
-            dbar_raw: None,
             mcn: None,
         },
     )
@@ -388,6 +387,7 @@ fn seed_one_disc(db_path: &Path) -> (Id, Id, Id) {
             identification_source: None,
             accuraterip_status: None,
             last_verified_at: None,
+            inferred_sample_shift: None,
             last_identify_errors: None,
             last_identify_at: None,
             provenance: None,

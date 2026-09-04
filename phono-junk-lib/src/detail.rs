@@ -1,15 +1,8 @@
 //! Detail-load helpers for Sprint 18's GUI album detail panel.
 //!
-//! Composes the disc-tree CRUD chain (`get_album` → `list_releases_for_album`
-//! → `list_discs_for_release` → `list_tracks_for_disc` + `list_assets_for_release`
-//! + `list_disagreements_for` + `find_rip_file_for_disc`) into a single
-//!
-//! call so the panel reads from a typed `AlbumDetail` value rather than
-//! reissuing the same join shape inline.
-//!
-//! Second consumer of this composition (`extract::export_disc` is the first).
-//! A follow-up sprint should refactor `export_disc` onto this module so
-//! disc-tree assembly has exactly one implementation. See TODO.md.
+//! Builds the typed detail tree from the repository's fixed-query album
+//! aggregate. Catalog size changes returned rows, never query count. Export
+//! resolves the same aggregate rather than rebuilding the hierarchy.
 //!
 //! For unidentified rips, [`load_unidentified_detail`] re-parses the TOC from
 //! the on-disk CUE/CHD on demand so the panel can show a track-count + length
@@ -22,7 +15,7 @@ use phono_junk_catalog::{
     Album, Asset, Disagreement, Disc, Id, Release, RipFile, Track, pick_front_cover,
 };
 use phono_junk_core::Toc;
-use phono_junk_db::{DbError, crud};
+use phono_junk_db::{DbError, aggregate};
 use phono_junk_toc::{read_toc_from_chd, read_toc_from_cue};
 use rusqlite::Connection;
 
@@ -54,8 +47,8 @@ pub struct DiscDetail {
     pub disc: Disc,
     pub tracks: Vec<Track>,
     /// First `RipFile` linked to this disc (none if the catalog row was
-    /// imported without a backing file). Carries `accuraterip_status` /
-    /// `last_verified_at` for the AR badge.
+    /// imported without a backing file). Carries the latest derived
+    /// verification status, timestamp, and inferred shift for the AR badge.
     pub rip_file: Option<RipFile>,
     pub disagreements: Vec<Disagreement>,
 }
@@ -69,20 +62,31 @@ pub enum DetailError {
     AlbumMissing(Id),
 }
 
-/// Compose the full album subtree in one call. ~O(releases × discs) DB
-/// queries — fine at MVP catalog sizes; lift to a worker only if a profile
-/// proves it hot.
+/// Compose the full album subtree from one repository aggregate.
 pub fn load_album_detail(conn: &Connection, album_id: Id) -> Result<AlbumDetail, DetailError> {
-    let album = crud::get_album(conn, album_id)?.ok_or(DetailError::AlbumMissing(album_id))?;
-    let releases_raw = crud::list_releases_for_album(conn, album_id)?;
-    let mut releases = Vec::with_capacity(releases_raw.len());
-    for release in releases_raw {
-        let discs_raw = crud::list_discs_for_release(conn, release.id)?;
-        let mut discs = Vec::with_capacity(discs_raw.len());
-        for disc in discs_raw {
-            let tracks = crud::list_tracks_for_disc(conn, disc.id)?;
-            let rip_file = crud::find_rip_file_for_disc(conn, disc.id)?;
-            let disagreements = crud::list_disagreements_for(conn, "Disc", disc.id)?;
+    let aggregate =
+        aggregate::load_album(conn, album_id)?.ok_or(DetailError::AlbumMissing(album_id))?;
+    let mut releases = Vec::with_capacity(aggregate.releases.len());
+    for release in aggregate.releases {
+        let mut discs = Vec::new();
+        for disc in aggregate
+            .discs
+            .iter()
+            .filter(|disc| disc.release_id == release.id)
+            .cloned()
+        {
+            let tracks = aggregate
+                .tracks
+                .iter()
+                .filter(|track| track.disc_id == disc.id)
+                .cloned()
+                .collect();
+            let rip_file = aggregate
+                .rip_files
+                .iter()
+                .find(|rip| rip.disc_id == Some(disc.id))
+                .cloned();
+            let disagreements = disagreements_for(&aggregate.disagreements, "Disc", disc.id);
             discs.push(DiscDetail {
                 disc,
                 tracks,
@@ -90,9 +94,15 @@ pub fn load_album_detail(conn: &Connection, album_id: Id) -> Result<AlbumDetail,
                 disagreements,
             });
         }
-        let assets = crud::list_assets_for_release(conn, release.id)?;
+        let assets: Vec<_> = aggregate
+            .assets
+            .iter()
+            .filter(|asset| asset.release_id == release.id)
+            .cloned()
+            .collect();
         let cover_asset = pick_front_cover(&assets).cloned();
-        let release_disagreements = crud::list_disagreements_for(conn, "Release", release.id)?;
+        let release_disagreements =
+            disagreements_for(&aggregate.disagreements, "Release", release.id);
         releases.push(ReleaseDetail {
             release,
             discs,
@@ -101,12 +111,26 @@ pub fn load_album_detail(conn: &Connection, album_id: Id) -> Result<AlbumDetail,
             disagreements: release_disagreements,
         });
     }
-    let disagreements = crud::list_disagreements_for(conn, "Album", album_id)?;
+    let disagreements = disagreements_for(&aggregate.disagreements, "Album", album_id);
     Ok(AlbumDetail {
-        album,
+        album: aggregate.album,
         releases,
         disagreements,
     })
+}
+
+fn disagreements_for(
+    disagreements: &[Disagreement],
+    entity_type: &str,
+    entity_id: Id,
+) -> Vec<Disagreement> {
+    disagreements
+        .iter()
+        .filter(|item| {
+            item.entity_id == entity_id && item.entity_type.eq_ignore_ascii_case(entity_type)
+        })
+        .cloned()
+        .collect()
 }
 
 /// Detail payload for an unidentified rip — the rip file row (which carries
@@ -200,6 +224,7 @@ mod tests {
             identification_source: None,
             accuraterip_status: None,
             last_verified_at: None,
+            inferred_sample_shift: None,
             last_identify_errors: Some(vec![IdentifyAttemptError {
                 provider: "MusicBrainz".into(),
                 message: "no match found".into(),

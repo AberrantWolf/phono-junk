@@ -6,13 +6,31 @@
 //! how to present the outcome.
 
 use crate::crc::TrackCrc;
-use crate::dbar::{DbarFile, ExpectedCrc};
+use crate::dbar::DbarFile;
+
+/// Which local algorithm matched the dBAR's unlabeled primary checksum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChecksumVersion {
+    V1,
+    V2,
+    Both,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackVerificationStatus {
+    Verified,
+    Mismatched,
+    NoData,
+    Ambiguous,
+}
 
 /// One hit: the pressing index within the `DbarFile` and its submitter count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CrcMatch {
     pub pressing: usize,
     pub confidence: u8,
+    pub checksum: u32,
+    pub version: ChecksumVersion,
 }
 
 /// Outcome of checking one track's computed CRC against a dBAR.
@@ -22,6 +40,9 @@ pub struct TrackVerification {
     pub computed: TrackCrc,
     pub v1_matches: Vec<CrcMatch>,
     pub v2_matches: Vec<CrcMatch>,
+    pub sample_shift: Option<i32>,
+    pub frame_450_support: bool,
+    pub status: TrackVerificationStatus,
 }
 
 impl TrackVerification {
@@ -35,17 +56,30 @@ impl TrackVerification {
     }
 
     pub fn is_verified(&self) -> bool {
-        !self.v1_matches.is_empty() || !self.v2_matches.is_empty()
+        self.status == TrackVerificationStatus::Verified
     }
 
-    /// Short human-readable summary suitable for persisting in
-    /// `RipFile.accuraterip_status` or printing in CLI output. The
-    /// format is stable and grep-friendly:
+    /// Best full-track match, preferring ARv2 when confidence is equal.
+    pub fn best_match(&self) -> Option<&CrcMatch> {
+        self.v2_matches
+            .iter()
+            .chain(self.v1_matches.iter())
+            .max_by_key(|matched| matched.confidence)
+    }
+
+    /// Short human-readable summary suitable for presentation. The format is
+    /// stable and grep-friendly; durable state is the structured verification
+    /// run rather than this derived string.
     ///
     /// - `"v2 confidence 8"` — v2 matched, best confidence 8
     /// - `"v1 confidence 3 (v2 no match)"` — only v1 matched
     /// - `"no match"` — dBAR loaded, neither version matched
     pub fn status_string(&self) -> String {
+        match self.status {
+            TrackVerificationStatus::NoData => return "no data".to_string(),
+            TrackVerificationStatus::Ambiguous => return "ambiguous offset".to_string(),
+            TrackVerificationStatus::Verified | TrackVerificationStatus::Mismatched => {}
+        }
         let v1_best = self.v1_matches.iter().map(|m| m.confidence).max();
         let v2_best = self.v2_matches.iter().map(|m| m.confidence).max();
         match (v1_best, v2_best) {
@@ -58,31 +92,57 @@ impl TrackVerification {
 
 /// Check one track's computed CRC against every pressing in a dBAR.
 ///
-/// `v2 == 0` entries are treated as legacy "no v2 submitted" sentinels
-/// and never match — otherwise every all-zero CRC would spuriously
-/// match silent or zero-init bugs.
+/// The primary dBAR checksum is not version-labelled. Compare the locally
+/// computed ARv2 and ARv1 values independently, preferring ARv2 for display
+/// when both happen to be equal.
 pub fn verify_track(dbar: &DbarFile, position: u8, computed: TrackCrc) -> TrackVerification {
     let mut v1_matches = Vec::new();
     let mut v2_matches = Vec::new();
     for (pressing, entry) in dbar.entries_for_track(position) {
-        if matches_v1(entry, computed.v1) {
+        let v2 = entry.checksum == computed.v2;
+        let v1 = entry.checksum == computed.v1;
+        if v1 {
             v1_matches.push(CrcMatch {
                 pressing,
                 confidence: entry.confidence,
+                checksum: entry.checksum,
+                version: if v2 {
+                    ChecksumVersion::Both
+                } else {
+                    ChecksumVersion::V1
+                },
             });
         }
-        if matches_v2(entry, computed.v2) {
+        if v2 {
             v2_matches.push(CrcMatch {
                 pressing,
                 confidence: entry.confidence,
+                checksum: entry.checksum,
+                version: if v1 {
+                    ChecksumVersion::Both
+                } else {
+                    ChecksumVersion::V2
+                },
             });
         }
     }
+    let status = if v1_matches.is_empty() && v2_matches.is_empty() {
+        if dbar.entries_for_track(position).next().is_some() {
+            TrackVerificationStatus::Mismatched
+        } else {
+            TrackVerificationStatus::NoData
+        }
+    } else {
+        TrackVerificationStatus::Verified
+    };
     TrackVerification {
         position,
         computed,
         v1_matches,
         v2_matches,
+        sample_shift: Some(0),
+        frame_450_support: false,
+        status,
     }
 }
 
@@ -92,16 +152,4 @@ pub fn verify_disc(dbar: &DbarFile, crcs: &[(u8, TrackCrc)]) -> Vec<TrackVerific
     crcs.iter()
         .map(|&(pos, crc)| verify_track(dbar, pos, crc))
         .collect()
-}
-
-fn matches_v1(entry: &ExpectedCrc, computed: u32) -> bool {
-    // v1 is always populated — even 0 is a real value (rare in practice).
-    entry.v1 == computed
-}
-
-fn matches_v2(entry: &ExpectedCrc, computed: u32) -> bool {
-    // v2 == 0 is the legacy "no v2 submitted" sentinel. Treat it as
-    // non-matching regardless of the computed value — otherwise every
-    // computed CRC would trivially match legacy entries with matching v1.
-    entry.v2 != 0 && entry.v2 == computed
 }

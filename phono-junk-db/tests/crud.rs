@@ -52,7 +52,6 @@ fn sample_disc(release_id: i64) -> Disc {
         cddb_id: Some("1a2b3c4d".into()),
         ar_discid1: Some("00112233".into()),
         ar_discid2: Some("44556677".into()),
-        dbar_raw: None,
         mcn: None,
     }
 }
@@ -90,8 +89,9 @@ fn sample_rip_file(disc_id: Option<i64>) -> RipFile {
         size: Some(700_000_000),
         identification_confidence: IdentificationConfidence::Certain,
         identification_source: Some(IdentificationSource::MusicBrainz),
-        accuraterip_status: Some("v2 confidence 8".into()),
-        last_verified_at: Some("2026-04-19T00:00:00Z".into()),
+        accuraterip_status: None,
+        last_verified_at: None,
+        inferred_sample_shift: None,
         last_identify_errors: Some(vec![phono_junk_catalog::IdentifyAttemptError {
             provider: "MusicBrainz".into(),
             message: "no match found".into(),
@@ -136,22 +136,14 @@ fn release_cascade_on_album_delete() {
 }
 
 #[test]
-fn disc_round_trip_with_toc_and_dbar() {
+fn disc_round_trip_with_toc() {
     let conn = open_memory().unwrap();
     let album_id = crud::insert_album(&conn, &sample_album()).unwrap();
     let release_id = crud::insert_release(&conn, &sample_release(album_id)).unwrap();
     let id = crud::insert_disc(&conn, &sample_disc(release_id)).unwrap();
 
-    let bytes = vec![0xDEu8, 0xAD, 0xBE, 0xEF];
-    crud::set_disc_dbar_raw(&conn, id, &bytes).unwrap();
-
     let disc = crud::get_disc(&conn, id).unwrap().unwrap();
     assert_eq!(disc.toc.as_ref().unwrap().last_track, 3);
-    assert_eq!(disc.dbar_raw.as_deref(), Some(bytes.as_slice()));
-    assert_eq!(
-        crud::get_disc_dbar_raw(&conn, id).unwrap().as_deref(),
-        Some(bytes.as_slice())
-    );
 }
 
 #[test]
@@ -275,12 +267,17 @@ fn asset_list_ordered_by_group_and_sequence() {
         &Asset {
             id: 0,
             release_id,
+            provider: "local".into(),
             asset_type: AssetType::Booklet,
             group_id: Some(1),
             sequence: 2,
             source_url: None,
             file_path: Some(PathBuf::from("/art/booklet-2.jpg")),
-            scraped_at: None,
+            width: None,
+            height: None,
+            confidence: None,
+            mime_type: None,
+            acquired_at: None,
         },
     )
     .unwrap();
@@ -289,12 +286,17 @@ fn asset_list_ordered_by_group_and_sequence() {
         &Asset {
             id: 0,
             release_id,
+            provider: "local".into(),
             asset_type: AssetType::Booklet,
             group_id: Some(1),
             sequence: 1,
             source_url: None,
             file_path: Some(PathBuf::from("/art/booklet-1.jpg")),
-            scraped_at: None,
+            width: None,
+            height: None,
+            confidence: None,
+            mime_type: None,
+            acquired_at: None,
         },
     )
     .unwrap();
@@ -303,12 +305,17 @@ fn asset_list_ordered_by_group_and_sequence() {
         &Asset {
             id: 0,
             release_id,
+            provider: "local".into(),
             asset_type: AssetType::FrontCover,
             group_id: None,
             sequence: 0,
             source_url: Some("https://example/cover.jpg".into()),
             file_path: None,
-            scraped_at: None,
+            width: None,
+            height: None,
+            confidence: None,
+            mime_type: None,
+            acquired_at: None,
         },
     )
     .unwrap();
@@ -331,12 +338,17 @@ fn asset_type_other_round_trips() {
         &Asset {
             id: 0,
             release_id,
+            provider: "local".into(),
             asset_type: AssetType::Other("poster".into()),
             group_id: None,
             sequence: 0,
             source_url: None,
             file_path: None,
-            scraped_at: None,
+            width: None,
+            height: None,
+            confidence: None,
+            mime_type: None,
+            acquired_at: None,
         },
     )
     .unwrap();
@@ -345,12 +357,46 @@ fn asset_type_other_round_trips() {
 }
 
 #[test]
+fn asset_evidence_fields_round_trip() {
+    let conn = open_memory().unwrap();
+    let album_id = crud::insert_album(&conn, &sample_album()).unwrap();
+    let release_id = crud::insert_release(&conn, &sample_release(album_id)).unwrap();
+    let id = crud::upsert_asset_evidence(
+        &conn,
+        release_id,
+        "discogs",
+        &AssetType::FrontCover,
+        "https://example.test/cover.png#fragment",
+        Some(1200),
+        Some(1200),
+        "identifier",
+        Some("image/png"),
+        "2026-09-03T00:00:00Z",
+    )
+    .unwrap();
+
+    let asset = crud::get_asset(&conn, id).unwrap().unwrap();
+    assert_eq!(asset.provider, "discogs");
+    assert_eq!(asset.width, Some(1200));
+    assert_eq!(asset.height, Some(1200));
+    assert_eq!(asset.confidence.as_deref(), Some("identifier"));
+    assert_eq!(asset.mime_type.as_deref(), Some("image/png"));
+    assert_eq!(asset.acquired_at.as_deref(), Some("2026-09-03T00:00:00Z"));
+    assert_eq!(
+        asset.source_url.as_deref(),
+        Some("https://example.test/cover.png")
+    );
+}
+
+#[test]
 fn disagreement_and_override_round_trip() {
     let conn = open_memory().unwrap();
+    let album_id = crud::insert_album(&conn, &sample_album()).unwrap();
     let d = Disagreement {
         id: 0,
         entity_type: "Album".into(),
-        entity_id: 1,
+        entity_id: album_id,
+        entity_key: None,
         field: "title".into(),
         source_a: "MusicBrainz".into(),
         value_a: "Kid A".into(),
@@ -362,12 +408,17 @@ fn disagreement_and_override_round_trip() {
     let d_id = crud::insert_disagreement(&conn, &d).unwrap();
     let got = crud::get_disagreement(&conn, d_id).unwrap().unwrap();
     assert_eq!(got.field, "title");
+    assert!(matches!(
+        got.entity_key,
+        Some(phono_junk_catalog::CatalogEntityKey::Album(_))
+    ));
     assert!(got.created_at.is_some());
 
     let o = Override {
         id: 0,
         entity_type: "Album".into(),
-        entity_id: 1,
+        entity_id: album_id,
+        entity_key: None,
         sub_path: Some("track[6].title".into()),
         field: "title".into(),
         override_value: "National Anthem".into(),
@@ -375,9 +426,13 @@ fn disagreement_and_override_round_trip() {
         created_at: None,
     };
     let o_id = crud::insert_override(&conn, &o).unwrap();
-    let list = crud::list_overrides_for(&conn, "Album", 1).unwrap();
+    let list = crud::list_overrides_for(&conn, "Album", album_id).unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].id, o_id);
+    assert!(matches!(
+        list[0].entity_key,
+        Some(phono_junk_catalog::CatalogEntityKey::Album(_))
+    ));
 }
 
 #[test]

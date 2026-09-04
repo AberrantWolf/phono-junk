@@ -1,7 +1,7 @@
 //! Provider traits and aggregation.
 //!
 //! Defines [`IdentificationProvider`] (MusicBrainz, Discogs, future sources)
-//! and [`AssetProvider`] (Cover Art Archive, iTunes, Amazon, future sources).
+//! and [`AssetProvider`] (Cover Art Archive, iTunes, future sources).
 //! Aggregation merges results across providers, writes `Disagreement` records
 //! on conflict, and respects user `Override` rows.
 //!
@@ -13,12 +13,14 @@
 pub mod consensus;
 pub mod fanout;
 pub mod http;
+pub mod pipeline;
 
 pub use consensus::{
     DisagreementEntity, MergedDisc, RawDisagreement, merge, merge_with_toc_fallback,
 };
-pub use fanout::{identify_parallel, lookup_assets_parallel, spawn_all};
+pub use fanout::{lookup_assets_parallel, spawn_all};
 pub use http::{HttpClient, HttpClientBuilder, HttpError, HttpResponse};
+pub use pipeline::{ProviderObservation, StagedIdentifyOutcome, score_and_resolve};
 
 /// Re-exports of the header types used by [`HttpClient::get_with_headers`].
 /// Provider crates construct headers through this module so they don't
@@ -42,6 +44,39 @@ pub enum DiscIdKind {
     AccurateRipId,
     Barcode,
     CatalogNumber,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ProviderTier {
+    ExactDisc,
+    MusicApi,
+    MusicFallback,
+    GenericBarcode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostRatePolicy {
+    pub host: &'static str,
+    pub requests: u32,
+    pub period_seconds: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderDescriptor {
+    pub name: &'static str,
+    pub tier: ProviderTier,
+    pub required_ids: &'static [DiscIdKind],
+    pub emitted_ids: &'static [DiscIdKind],
+    pub identifies: bool,
+    pub supplies_assets: bool,
+    pub required_credential: Option<&'static str>,
+    pub host_rate_policy: Option<HostRatePolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct LearnedExternalId {
+    pub kind: DiscIdKind,
+    pub value: String,
 }
 
 /// Asset categories a provider may return.
@@ -70,7 +105,7 @@ pub enum AssetConfidence {
 /// Credentials passed to providers that need them.
 ///
 /// Providers that don't need auth (MusicBrainz, Cover Art Archive, iTunes)
-/// ignore this. Providers that do (Discogs, Amazon PA-API) pull their
+/// ignore this. Providers that do (Discogs, Barcode Lookup) pull their
 /// token out by name.
 ///
 /// Never leaks via `Debug` — the custom impl emits provider names only.
@@ -146,6 +181,111 @@ pub struct ProviderResult {
     pub raw_response: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseCandidate {
+    pub candidate_key: String,
+    pub provider: String,
+    pub album: AlbumMeta,
+    pub release: ReleaseMeta,
+    pub tracks: Vec<TrackMeta>,
+    pub physical_disc_number: Option<u8>,
+    pub exact_disc_association: bool,
+    pub raw_response: Option<serde_json::Value>,
+    pub cover_art_urls: Vec<String>,
+}
+
+impl ReleaseCandidate {
+    pub fn from_result(result: ProviderResult) -> Option<Self> {
+        let album = result.album?;
+        let release = result.release.unwrap_or_default();
+        let candidate_key = release
+            .mbid
+            .as_ref()
+            .map(|id| format!("musicbrainz:release:{id}"))
+            .unwrap_or_else(|| {
+                format!(
+                    "{}:{}:{}:{}",
+                    result.provider,
+                    release.barcode.as_deref().unwrap_or(""),
+                    release.catalog_number.as_deref().unwrap_or(""),
+                    album.title.as_deref().unwrap_or("")
+                )
+            });
+        Some(Self {
+            candidate_key,
+            provider: result.provider,
+            album,
+            release,
+            tracks: result.tracks,
+            physical_disc_number: None,
+            exact_disc_association: false,
+            raw_response: result.raw_response,
+            cover_art_urls: result.cover_art_urls,
+        })
+    }
+
+    pub fn into_provider_result(self) -> ProviderResult {
+        ProviderResult {
+            album: Some(self.album),
+            release: Some(self.release),
+            tracks: self.tracks,
+            cover_art_urls: self.cover_art_urls,
+            provider: self.provider,
+            raw_response: self.raw_response,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProviderLookup {
+    pub release_candidates: Vec<ReleaseCandidate>,
+    pub learned_ids: Vec<LearnedExternalId>,
+    pub asset_candidates: Vec<String>,
+    pub raw_response: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CandidateScore {
+    pub exact_disc_association: u8,
+    pub exact_release_corroboration: u8,
+    pub barcode_catalog_corroboration: u8,
+    pub music_provider_support: u8,
+    pub track_duration_agreement: u32,
+    pub metadata_completeness: u8,
+    pub provider_priority: u8,
+}
+
+impl CandidateScore {
+    pub fn evidence_components(self) -> (u8, u8, u8, u8, u32, u8) {
+        (
+            self.exact_disc_association,
+            self.exact_release_corroboration,
+            self.barcode_catalog_corroboration,
+            self.music_provider_support,
+            self.track_duration_agreement,
+            self.metadata_completeness,
+        )
+    }
+
+    fn rank(self) -> (u8, u8, u8, u8, u32, u8, u8) {
+        let (a, b, c, d, e, f) = self.evidence_components();
+        (a, b, c, d, e, f, self.provider_priority)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoredCandidate {
+    pub candidate: ReleaseCandidate,
+    pub score: CandidateScore,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidateResolution {
+    pub selected: ScoredCandidate,
+    pub alternatives: Vec<ScoredCandidate>,
+    pub evidentially_ambiguous: bool,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AlbumMeta {
     pub title: Option<String>,
@@ -195,15 +335,29 @@ pub trait IdentificationProvider: Send + Sync {
 
     /// Which IDs this provider can resolve. Aggregator uses this to skip
     /// providers that can't answer with the data available.
-    fn supported_ids(&self) -> &[DiscIdKind];
+    fn supported_ids(&self) -> &'static [DiscIdKind];
 
-    /// Attempt to identify the disc. `Ok(None)` means no match found.
-    fn lookup(
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor {
+            name: self.name(),
+            tier: ProviderTier::MusicApi,
+            required_ids: self.supported_ids(),
+            emitted_ids: &[],
+            identifies: true,
+            supplies_assets: false,
+            required_credential: None,
+            host_rate_policy: None,
+        }
+    }
+
+    /// Return every release candidate and learned identifier observed for this
+    /// exact query. An empty lookup is a successful no-match result.
+    fn lookup_many(
         &self,
         toc: &Toc,
         ids: &DiscIds,
         creds: &Credentials,
-    ) -> Result<Option<ProviderResult>, ProviderError>;
+    ) -> Result<ProviderLookup, ProviderError>;
 }
 
 /// Context passed to [`AssetProvider::lookup_art`].
@@ -225,28 +379,30 @@ pub struct AssetLookupCtx<'a> {
 pub trait AssetProvider: Send + Sync {
     fn name(&self) -> &'static str;
 
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor {
+            name: self.name(),
+            tier: ProviderTier::MusicApi,
+            required_ids: &[],
+            emitted_ids: &[],
+            identifies: false,
+            supplies_assets: true,
+            required_credential: None,
+            host_rate_policy: None,
+        }
+    }
+
     /// Which asset types this provider can return.
-    fn asset_types(&self) -> &[AssetType];
+    fn asset_types(&self) -> &'static [AssetType];
 
     /// Enumerate candidate assets for a release. Caller decides which to pick.
     fn lookup_art(&self, ctx: &AssetLookupCtx<'_>) -> Result<Vec<AssetCandidate>, ProviderError>;
 }
 
-/// Aggregator: fans out to registered providers and merges results.
+/// Aggregator: executes registered providers through a staged evidence graph.
 pub struct Aggregator {
     identifiers: Vec<Box<dyn IdentificationProvider>>,
     assets: Vec<Box<dyn AssetProvider>>,
-}
-
-/// Output of [`Aggregator::identify`]. Pure value — no DB side effects.
-/// Persistence (writing `Album` / `Release` / `Disc` / `Track` /
-/// `Disagreement` rows) is orchestrated by `phono-junk-lib::identify`.
-pub struct IdentifyOutcome {
-    pub merged: MergedDisc,
-    /// Provider errors that did not short-circuit the batch.
-    pub errors: Vec<(String, ProviderError)>,
-    /// `true` iff at least one provider returned `Ok(Some(...))`.
-    pub any_match: bool,
 }
 
 /// Output of [`Aggregator::lookup_assets`]. Candidates are deduplicated
@@ -282,42 +438,36 @@ impl Aggregator {
         &self.assets
     }
 
-    /// Fan out to every registered [`IdentificationProvider`] that can
-    /// answer with the ids available, merge the matches via
-    /// [`consensus::merge`], and return the outcome. Provider errors are
-    /// collected in `errors` and never short-circuit the batch.
-    pub fn identify(&self, toc: &Toc, ids: &DiscIds, creds: &Credentials) -> IdentifyOutcome {
-        let raw = fanout::identify_parallel(&self.identifiers, toc, ids, creds);
-
-        let mut matches: Vec<ProviderResult> = Vec::new();
-        let mut errors: Vec<(String, ProviderError)> = Vec::new();
-        for (name, result) in raw {
-            match result {
-                Ok(Some(r)) => matches.push(r),
-                Ok(None) => {}
-                Err(e) => errors.push((name, e)),
-            }
-        }
-
-        let any_match = !matches.is_empty();
-        let merged = if any_match {
-            consensus::merge_with_toc_fallback(&matches, toc)
-        } else {
-            MergedDisc::default()
-        };
-
-        IdentifyOutcome {
-            merged,
-            errors,
-            any_match,
-        }
+    pub fn identify_staged(
+        &self,
+        toc: &Toc,
+        ids: &DiscIds,
+        creds: &Credentials,
+    ) -> StagedIdentifyOutcome {
+        pipeline::identify_staged(&self.identifiers, toc, ids, creds)
     }
 
     /// Fan out to every registered [`AssetProvider`], collect candidates
     /// in priority order, and deduplicate by `(asset_type, source_url)`
     /// so CAA and iTunes can't both insert the same front-cover URL.
     pub fn lookup_assets(&self, ctx: &AssetLookupCtx<'_>) -> AssetOutcome {
-        let raw = fanout::lookup_assets_parallel(&self.assets, ctx);
+        self.lookup_assets_excluding(ctx, &[])
+    }
+
+    /// Reuse metadata-stage asset URLs by skipping providers already queried
+    /// for the selected candidate. Asset-only providers still participate.
+    pub fn lookup_assets_excluding(
+        &self,
+        ctx: &AssetLookupCtx<'_>,
+        excluded_providers: &[&str],
+    ) -> AssetOutcome {
+        let providers: Vec<&dyn AssetProvider> = self
+            .assets
+            .iter()
+            .map(|provider| provider.as_ref())
+            .filter(|provider| !excluded_providers.contains(&provider.name()))
+            .collect();
+        let raw = fanout::lookup_assets_parallel_refs(&providers, ctx);
         let mut candidates: Vec<AssetCandidate> = Vec::new();
         let mut seen: std::collections::HashSet<(AssetType, String)> =
             std::collections::HashSet::new();

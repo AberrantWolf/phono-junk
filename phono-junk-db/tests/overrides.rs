@@ -1,5 +1,4 @@
-use phono_junk_catalog::{Album, Disc, Override, Release, RipFile, Track};
-use phono_junk_core::{IdentificationConfidence, IdentificationState};
+use phono_junk_catalog::{Album, Disc, Override, Release, Track};
 use phono_junk_db::overrides::{
     OverrideError, OverrideTarget, apply, apply_override, parse_sub_path,
 };
@@ -29,7 +28,6 @@ fn disc_with_tracks(n: u8) -> (Disc, Vec<Track>) {
         cddb_id: None,
         ar_discid1: None,
         ar_discid2: None,
-        dbar_raw: None,
         mcn: None,
     };
     let tracks = (1..=n)
@@ -188,6 +186,7 @@ fn apply_from_override_row() {
         id: 1,
         entity_type: "Disc".into(),
         entity_id: 10,
+        entity_key: None,
         sub_path: Some("track[2]".into()),
         field: "title".into(),
         override_value: "National Anthem".into(),
@@ -203,34 +202,4 @@ fn apply_from_override_row() {
     )
     .unwrap();
     assert_eq!(tracks[1].title.as_deref(), Some("National Anthem"));
-}
-
-#[test]
-fn rip_file_accuraterip_status() {
-    let mut f = RipFile {
-        id: 1,
-        disc_id: None,
-        cue_path: None,
-        chd_path: None,
-        bin_paths: Vec::new(),
-        mtime: None,
-        size: None,
-        identification_confidence: IdentificationConfidence::Unidentified,
-        identification_source: None,
-        accuraterip_status: None,
-        last_verified_at: None,
-        last_identify_errors: None,
-        last_identify_at: None,
-        provenance: None,
-        identification_state: IdentificationState::Unscanned,
-        last_state_change_at: None,
-    };
-    apply_override(
-        OverrideTarget::RipFile(&mut f),
-        &[],
-        "accuraterip_status",
-        "manual pass",
-    )
-    .unwrap();
-    assert_eq!(f.accuraterip_status.as_deref(), Some("manual pass"));
 }

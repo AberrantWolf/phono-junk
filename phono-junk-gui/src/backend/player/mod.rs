@@ -24,7 +24,7 @@ use kira::sound::PlaybackState;
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
 use kira::track::{TrackBuilder, TrackHandle};
 use kira::{AudioManager, AudioManagerSettings};
-use phono_junk_catalog::{Id, RipFile};
+use phono_junk_lib::{Id, RipFile};
 
 pub use error::PlayerError;
 

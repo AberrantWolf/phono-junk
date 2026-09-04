@@ -210,6 +210,7 @@ pub fn apply_sidecar_to_catalog(
                 id: 0,
                 entity_type: "disc".into(),
                 entity_id: disc_id,
+                entity_key: None,
                 field: "mcn".into(),
                 source_a: source_tag(&IdentificationSource::Redumper, "log"),
                 value_a: log_mcn.clone(),

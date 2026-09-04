@@ -35,17 +35,20 @@
 
 use chrono::Utc;
 use phono_junk_catalog::{
-    Album, Asset, AssetType as CatalogAssetType, Disagreement, Disc, Id, IdentifyAttemptError,
-    Release, Track,
+    Album, AssetType as CatalogAssetType, Disagreement, Disc, Id, IdentifyAttemptError, Release,
+    Track,
 };
 use phono_junk_core::{AudioError, DiscIds, IdentificationConfidence, IdentificationSource, Toc};
 use phono_junk_db::overrides::{OverrideTarget, apply as apply_override};
-use phono_junk_db::{DbError, crud};
+use phono_junk_db::{DbError, crud, evidence};
 use phono_junk_identify::{
-    AssetCandidate, AssetLookupCtx, AssetType as ProviderAssetType, DisagreementEntity,
-    IdentifyOutcome, ProviderError, RawDisagreement,
+    AssetCandidate, AssetConfidence, AssetLookupCtx, AssetType as ProviderAssetType,
+    CandidateResolution, DisagreementEntity, DiscIdKind, ProviderError, RawDisagreement,
+    ReleaseCandidate,
 };
 use rusqlite::Connection;
+use std::collections::HashMap;
+use url::Url;
 
 use crate::PhonoContext;
 
@@ -101,7 +104,11 @@ impl PhonoContext {
             return cached_outcome(conn, disc, rip_file_id);
         }
 
-        // Step 2+3: fan-out + merge.
+        // Append-only attempt row lands before provider work. Individual
+        // observations are committed after each staged outcome is available;
+        // the final projection is a separate atomic transaction.
+        let attempt_key = stable_disc_key(ids);
+        let attempt_id = evidence::start_identification_attempt(conn, rip_file_id, &attempt_key)?;
         let creds = self.credentials.to_credentials();
         log::info!(
             "identify: dispatching to providers — mb_discid={:?} cddb_id={:?} ar1={:?}",
@@ -109,7 +116,9 @@ impl PhonoContext {
             ids.cddb_id,
             ids.ar_discid1,
         );
-        let outcome: IdentifyOutcome = self.aggregator.identify(toc, ids, &creds);
+        let outcome = self.aggregator.identify_staged(toc, ids, &creds);
+        let observation_ids =
+            persist_provider_observations(conn, attempt_id, &outcome.observations)?;
         let mut humanized_errors: Vec<IdentifyAttemptError> = outcome
             .errors
             .iter()
@@ -123,17 +132,27 @@ impl PhonoContext {
             log::warn!("identify: provider {name} returned error: {err}");
         }
         log::info!(
-            "identify: fan-out complete — any_match={} sources={:?} errors={}",
-            outcome.any_match,
-            outcome.merged.sources,
+            "identify: staged lookup complete — candidates={} errors={}",
+            outcome
+                .resolution
+                .as_ref()
+                .map_or(0, |resolution| resolution.alternatives.len() + 1),
             provider_errors.len(),
         );
 
-        if !outcome.any_match {
+        let Some(resolution) = outcome.resolution else {
             // Step 4: unidentified. Preserve TOC on the rip file; no
             // Album/Release/Disc row is created.
             mark_unidentified(conn, rip_file_id)?;
             persist_identify_attempt(conn, rip_file_id, &humanized_errors)?;
+            evidence::finish_identification_attempt(
+                conn,
+                attempt_id,
+                "unidentified",
+                None,
+                Some("unidentified"),
+                None,
+            )?;
             return Ok(IdentifiedDisc {
                 disc_id: None,
                 album_id: None,
@@ -144,9 +163,24 @@ impl PhonoContext {
                 identified: false,
                 provider_errors,
             });
-        }
+        };
 
-        let merged = outcome.merged;
+        persist_candidates(conn, attempt_id, &resolution, &observation_ids)?;
+        let selected_candidate = resolution.selected.candidate.clone();
+        let selected_provider = selected_candidate.provider.clone();
+        let physical_disc_number = selected_candidate.physical_disc_number.unwrap_or(1);
+        let mut merged = phono_junk_identify::merge_with_toc_fallback(
+            &[selected_candidate.clone().into_provider_result()],
+            toc,
+        );
+        // Alternative observations remain disagreement evidence even though
+        // only the scored winner is projected into catalog fields.
+        let all_results: Vec<_> = std::iter::once(&resolution.selected)
+            .chain(resolution.alternatives.iter())
+            .map(|scored| scored.candidate.clone().into_provider_result())
+            .collect();
+        merged.disagreements =
+            phono_junk_identify::merge_with_toc_fallback(&all_results, toc).disagreements;
         let source = first_source(&merged.sources);
 
         // Asset fan-out runs BEFORE opening the catalog transaction — it's
@@ -158,7 +192,12 @@ impl PhonoContext {
             ids,
             creds: &creds,
         };
-        let asset_outcome = self.aggregator.lookup_assets(&asset_ctx);
+        let mut asset_outcome = self
+            .aggregator
+            .lookup_assets_excluding(&asset_ctx, &[selected_provider.as_str()]);
+        asset_outcome
+            .candidates
+            .extend(reused_asset_candidates(&selected_candidate));
         for (name, e) in &asset_outcome.errors {
             let h = humanize_provider_error(name, e);
             provider_errors.push((h.provider.clone(), h.message.clone()));
@@ -172,16 +211,22 @@ impl PhonoContext {
 
         // Step 5: persist catalog rows. Reuse existing Album by MBID.
         let album_id = upsert_album(&txn, &merged.album)?;
-        let release_id = upsert_release(&txn, album_id, &merged.release)?;
-        let (disc_id, disc_was_reused) = upsert_disc(&txn, release_id, toc, ids)?;
-        if disc_was_reused {
-            clear_stale_children(&txn, release_id, disc_id)?;
-        }
-        let mut tracks = insert_tracks(&txn, disc_id, &merged.tracks)?;
+        let release_id = upsert_release(
+            &txn,
+            album_id,
+            &merged.release,
+            &resolution.selected.candidate.candidate_key,
+        )?;
+        let (disc_id, _) = upsert_disc(&txn, release_id, physical_disc_number, toc, ids)?;
+        let mut tracks = upsert_tracks(&txn, disc_id, &merged.tracks)?;
 
         // Step 6: disagreements.
-        let any_disagreements = !merged.disagreements.is_empty();
+        let any_disagreements =
+            !merged.disagreements.is_empty() || resolution.evidentially_ambiguous;
         persist_disagreements(&txn, &merged.disagreements, album_id, release_id, &tracks)?;
+        if resolution.evidentially_ambiguous {
+            persist_candidate_ambiguity(&txn, release_id, &resolution)?;
+        }
 
         // Step 7: apply overrides.
         let mut album = crud::get_album(&txn, album_id)?
@@ -197,9 +242,31 @@ impl PhonoContext {
 
         // Step 9: update rip file (if present).
         if let Some(rf_id) = rip_file_id {
-            update_rip_file(&txn, rf_id, disc_id, source.as_ref())?;
+            update_rip_file(
+                &txn,
+                rf_id,
+                disc_id,
+                source.as_ref(),
+                resolution.evidentially_ambiguous,
+            )?;
         }
         persist_identify_attempt(&txn, rip_file_id, &humanized_errors)?;
+        let ambiguity_json = resolution
+            .evidentially_ambiguous
+            .then(|| ambiguity_json(&resolution))
+            .transpose()?;
+        evidence::finish_identification_attempt(
+            &txn,
+            attempt_id,
+            "resolved",
+            Some(&resolution.selected.candidate.candidate_key),
+            Some(if resolution.evidentially_ambiguous {
+                "low"
+            } else {
+                "high"
+            }),
+            ambiguity_json.as_deref(),
+        )?;
 
         txn.commit().map_err(DbError::from)?;
 
@@ -213,6 +280,163 @@ impl PhonoContext {
             identified: true,
             provider_errors,
         })
+    }
+}
+
+fn stable_disc_key(ids: &DiscIds) -> String {
+    if let (Some(id1), Some(id2), Some(cddb)) = (
+        ids.ar_discid1.as_deref(),
+        ids.ar_discid2.as_deref(),
+        ids.cddb_id.as_deref(),
+    ) {
+        format!("disc:accuraterip:{id1}:{id2}:{cddb}")
+    } else if let Some(mbid) = ids.mb_discid.as_deref() {
+        format!("disc:musicbrainz:{mbid}")
+    } else {
+        format!(
+            "disc:local:attempt-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        )
+    }
+}
+
+fn persist_provider_observations(
+    conn: &Connection,
+    attempt_id: i64,
+    observations: &[phono_junk_identify::ProviderObservation],
+) -> Result<HashMap<String, Vec<i64>>, DbError> {
+    let mut ids = HashMap::new();
+    for observation in observations {
+        let raw = observation
+            .lookup
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| DbError::Migration(error.to_string()))?;
+        let id = evidence::insert_provider_observation(
+            conn,
+            attempt_id,
+            &evidence::NewProviderObservation {
+                provider: &observation.provider,
+                input_kind: id_kind(observation.input_kind),
+                input_value: &observation.input_value,
+                stage: observation.stage,
+                raw_response_json: raw.as_deref(),
+                error_text: observation.error.as_deref(),
+            },
+        )?;
+        ids.entry(observation.provider.clone())
+            .or_insert_with(Vec::new)
+            .push(id);
+    }
+    Ok(ids)
+}
+
+fn persist_candidates(
+    conn: &Connection,
+    attempt_id: i64,
+    resolution: &CandidateResolution,
+    observation_ids: &HashMap<String, Vec<i64>>,
+) -> Result<(), DbError> {
+    for (selected, scored) in std::iter::once((true, &resolution.selected)).chain(
+        resolution
+            .alternatives
+            .iter()
+            .map(|candidate| (false, candidate)),
+    ) {
+        let candidate_json = serde_json::to_string(&scored.candidate)
+            .map_err(|error| DbError::Migration(error.to_string()))?;
+        let score_json = serde_json::to_string(&scored.score)
+            .map_err(|error| DbError::Migration(error.to_string()))?;
+        let candidate_id = evidence::insert_identification_candidate(
+            conn,
+            attempt_id,
+            &scored.candidate.candidate_key,
+            &candidate_json,
+            &score_json,
+            selected,
+        )?;
+        if let Some(provider_observations) = observation_ids.get(&scored.candidate.provider) {
+            for &observation_id in provider_observations {
+                evidence::link_candidate_observation(conn, candidate_id, observation_id)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn persist_candidate_ambiguity(
+    conn: &Connection,
+    release_id: Id,
+    resolution: &CandidateResolution,
+) -> Result<(), DbError> {
+    let alternatives = serde_json::to_string(
+        &resolution
+            .alternatives
+            .iter()
+            .map(|candidate| &candidate.candidate.candidate_key)
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|error| DbError::Migration(error.to_string()))?;
+    crud::insert_disagreement(
+        conn,
+        &Disagreement {
+            id: 0,
+            entity_type: "Release".into(),
+            entity_id: release_id,
+            entity_key: None,
+            field: "identification_candidate".into(),
+            source_a: resolution.selected.candidate.provider.clone(),
+            value_a: resolution.selected.candidate.candidate_key.clone(),
+            source_b: "candidate_pipeline".into(),
+            value_b: alternatives,
+            resolved: false,
+            created_at: None,
+        },
+    )?;
+    Ok(())
+}
+
+fn ambiguity_json(resolution: &CandidateResolution) -> Result<String, DbError> {
+    serde_json::to_string(
+        &resolution
+            .alternatives
+            .iter()
+            .map(|candidate| {
+                serde_json::json!({
+                    "candidate_key": candidate.candidate.candidate_key,
+                    "provider": candidate.candidate.provider,
+                    "score": candidate.score,
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|error| DbError::Migration(error.to_string()))
+}
+
+fn reused_asset_candidates(candidate: &ReleaseCandidate) -> Vec<AssetCandidate> {
+    candidate
+        .cover_art_urls
+        .iter()
+        .filter_map(|value| Url::parse(value).ok())
+        .map(|source_url| AssetCandidate {
+            provider: candidate.provider.clone(),
+            asset_type: ProviderAssetType::FrontCover,
+            source_url,
+            width: None,
+            height: None,
+            confidence: AssetConfidence::Identifier,
+        })
+        .collect()
+}
+
+fn id_kind(kind: DiscIdKind) -> &'static str {
+    match kind {
+        DiscIdKind::MbDiscId => "mb_discid",
+        DiscIdKind::CddbId => "cddb_id",
+        DiscIdKind::AccurateRipId => "accuraterip_id",
+        DiscIdKind::Barcode => "barcode",
+        DiscIdKind::CatalogNumber => "catalog_number",
     }
 }
 
@@ -251,7 +475,7 @@ fn cached_outcome(
         IdentifyError::Db(DbError::Migration("release missing for cached disc".into()))
     })?;
     if let Some(rf_id) = rip_file_id {
-        update_rip_file(conn, rf_id, disc.id, None)?;
+        update_rip_file(conn, rf_id, disc.id, None, false)?;
     }
     Ok(IdentifiedDisc {
         disc_id: Some(disc.id),
@@ -271,8 +495,12 @@ fn cached_outcome(
 
 fn upsert_album(conn: &Connection, meta: &phono_junk_identify::AlbumMeta) -> Result<Id, DbError> {
     if let Some(mbid) = meta.mbid.as_deref()
-        && let Some(existing) = find_album_by_mbid(conn, mbid)?
+        && let Some(mut existing) = find_album_by_mbid(conn, mbid)?
     {
+        existing.title = meta.title.clone().unwrap_or(existing.title);
+        existing.artist_credit = meta.artist_credit.clone().or(existing.artist_credit);
+        existing.year = meta.year.or(existing.year);
+        crud::update_album(conn, &existing)?;
         return Ok(existing.id);
     }
     let album = Album {
@@ -307,13 +535,35 @@ fn upsert_release(
     conn: &Connection,
     album_id: Id,
     meta: &phono_junk_identify::ReleaseMeta,
+    candidate_key: &str,
 ) -> Result<Id, DbError> {
     if let Some(mbid) = meta.mbid.as_deref() {
-        for r in crud::list_releases_for_album(conn, album_id)? {
+        for mut r in crud::list_releases_for_album(conn, album_id)? {
             if r.mbid.as_deref() == Some(mbid) {
+                r.country = meta.country.clone().or(r.country);
+                r.date = meta.date.clone().or(r.date);
+                r.label = meta.label.clone().or(r.label);
+                r.catalog_number = meta.catalog_number.clone().or(r.catalog_number);
+                r.barcode = meta.barcode.clone().or(r.barcode);
+                r.language = meta.language.clone().or(r.language);
+                r.script = meta.script.clone().or(r.script);
+                crud::update_release(conn, &r)?;
                 return Ok(r.id);
             }
         }
+    }
+    let stable_key = format!("release:{candidate_key}");
+    if let Some(mut release) = crud::find_release_by_stable_key(conn, &stable_key)? {
+        release.album_id = album_id;
+        release.country = meta.country.clone().or(release.country);
+        release.date = meta.date.clone().or(release.date);
+        release.label = meta.label.clone().or(release.label);
+        release.catalog_number = meta.catalog_number.clone().or(release.catalog_number);
+        release.barcode = meta.barcode.clone().or(release.barcode);
+        release.language = meta.language.clone().or(release.language);
+        release.script = meta.script.clone().or(release.script);
+        crud::update_release(conn, &release)?;
+        return Ok(release.id);
     }
     let release = Release {
         id: 0,
@@ -328,12 +578,17 @@ fn upsert_release(
         language: meta.language.clone(),
         script: meta.script.clone(),
     };
-    crud::insert_release(conn, &release)
+    let release_id = crud::insert_release(conn, &release)?;
+    if meta.mbid.is_none() {
+        crud::set_catalog_entity_key(conn, "release", release_id, &stable_key)?;
+    }
+    Ok(release_id)
 }
 
 fn upsert_disc(
     conn: &Connection,
     release_id: Id,
+    disc_number: u8,
     toc: &Toc,
     ids: &DiscIds,
 ) -> Result<(Id, bool), DbError> {
@@ -352,19 +607,25 @@ fn upsert_disc(
             crud::update_disc(conn, &existing)?;
             delete_release_if_orphan(conn, old_release_id)?;
         }
+        existing.disc_number = disc_number;
+        existing.toc = Some(toc.clone());
+        existing.mb_discid = ids.mb_discid.clone().or(existing.mb_discid);
+        existing.cddb_id = ids.cddb_id.clone().or(existing.cddb_id);
+        existing.ar_discid1 = ids.ar_discid1.clone().or(existing.ar_discid1);
+        existing.ar_discid2 = ids.ar_discid2.clone().or(existing.ar_discid2);
+        crud::update_disc(conn, &existing)?;
         return Ok((existing.id, true));
     }
     let disc = Disc {
         id: 0,
         release_id,
-        disc_number: 1,
+        disc_number,
         format: "CD".to_string(),
         toc: Some(toc.clone()),
         mb_discid: ids.mb_discid.clone(),
         cddb_id: ids.cddb_id.clone(),
         ar_discid1: ids.ar_discid1.clone(),
         ar_discid2: ids.ar_discid2.clone(),
-        dbar_raw: None,
         mcn: None,
     };
     Ok((crud::insert_disc(conn, &disc)?, false))
@@ -400,52 +661,41 @@ fn delete_release_if_orphan(conn: &Connection, release_id: Id) -> Result<(), DbE
     Ok(())
 }
 
-/// When an identify run reuses an existing disc (force-refresh of a disc
-/// we already scraped), wipe tracks / disagreements / assets before
-/// inserting fresh rows — otherwise the `UNIQUE (disc_id, position)`
-/// constraint on tracks triggers, and stale disagreements / assets pile
-/// up alongside the new ones.
-fn clear_stale_children(conn: &Connection, release_id: Id, disc_id: Id) -> Result<(), DbError> {
-    for t in crud::list_tracks_for_disc(conn, disc_id)? {
-        for d in crud::list_disagreements_for(conn, "Track", t.id)? {
-            crud::delete_disagreement(conn, d.id)?;
-        }
-        crud::delete_track(conn, t.id)?;
-    }
-    for d in crud::list_disagreements_for(conn, "Disc", disc_id)? {
-        crud::delete_disagreement(conn, d.id)?;
-    }
-    for d in crud::list_disagreements_for(conn, "Release", release_id)? {
-        crud::delete_disagreement(conn, d.id)?;
-    }
-    for a in crud::list_assets_for_release(conn, release_id)? {
-        crud::delete_asset(conn, a.id)?;
-    }
-    Ok(())
-}
-
-fn insert_tracks(
+/// Refresh track projections in place, preserving stable row IDs so overrides
+/// and cached evidence remain attached across identification runs.
+fn upsert_tracks(
     conn: &Connection,
     disc_id: Id,
     metas: &[phono_junk_identify::TrackMeta],
 ) -> Result<Vec<Track>, DbError> {
+    let mut existing: HashMap<u8, Track> = crud::list_tracks_for_disc(conn, disc_id)?
+        .into_iter()
+        .map(|track| (track.position, track))
+        .collect();
     let mut out = Vec::with_capacity(metas.len());
     for m in metas {
-        let track = Track {
+        let mut track = existing.remove(&m.position).unwrap_or(Track {
             id: 0,
             disc_id,
             position: m.position,
-            title: m.title.clone(),
-            artist_credit: m.artist_credit.clone(),
-            length_frames: m.length_frames,
-            isrc: m.isrc.clone(),
-            mbid: m.mbid.clone(),
+            title: None,
+            artist_credit: None,
+            length_frames: None,
+            isrc: None,
+            mbid: None,
             recording_mbid: None,
-        };
-        let id = crud::insert_track(conn, &track)?;
-        let mut stored = track;
-        stored.id = id;
-        out.push(stored);
+        });
+        track.title = m.title.clone().or(track.title);
+        track.artist_credit = m.artist_credit.clone().or(track.artist_credit);
+        track.length_frames = m.length_frames.or(track.length_frames);
+        track.isrc = m.isrc.clone().or(track.isrc);
+        track.mbid = m.mbid.clone().or(track.mbid);
+        if track.id == 0 {
+            track.id = crud::insert_track(conn, &track)?;
+        } else {
+            crud::update_track(conn, &track)?;
+        }
+        out.push(track);
     }
     Ok(out)
 }
@@ -481,6 +731,7 @@ fn persist_disagreements(
             id: 0,
             entity_type: entity_type.to_string(),
             entity_id,
+            entity_key: None,
             field: d.field.to_string(),
             source_a: d.source_a.clone(),
             value_a: json_to_string(&d.value_a),
@@ -573,20 +824,29 @@ fn insert_assets(
 ) -> Result<usize, DbError> {
     let mut count = 0;
     for c in candidates {
-        let asset = Asset {
-            id: 0,
+        crud::upsert_asset_evidence(
+            conn,
             release_id,
-            asset_type: provider_to_catalog(&c.asset_type),
-            group_id: None,
-            sequence: 0,
-            source_url: Some(c.source_url.as_str().to_string()),
-            file_path: None,
-            scraped_at: None,
-        };
-        crud::insert_asset(conn, &asset)?;
+            &c.provider,
+            &provider_to_catalog(&c.asset_type),
+            c.source_url.as_str(),
+            c.width,
+            c.height,
+            asset_confidence(c.confidence),
+            None,
+            &Utc::now().to_rfc3339(),
+        )?;
         count += 1;
     }
     Ok(count)
+}
+
+fn asset_confidence(confidence: AssetConfidence) -> &'static str {
+    match confidence {
+        AssetConfidence::Exact => "exact",
+        AssetConfidence::Identifier => "identifier",
+        AssetConfidence::Fuzzy => "fuzzy",
+    }
 }
 
 fn provider_to_catalog(t: &ProviderAssetType) -> CatalogAssetType {
@@ -623,12 +883,17 @@ fn update_rip_file(
     rip_file_id: Id,
     disc_id: Id,
     source: Option<&IdentificationSource>,
+    low_confidence: bool,
 ) -> Result<(), DbError> {
     let Some(mut rf) = crud::get_rip_file(conn, rip_file_id)? else {
         return Ok(());
     };
     rf.disc_id = Some(disc_id);
-    rf.identification_confidence = IdentificationConfidence::Certain;
+    rf.identification_confidence = if low_confidence {
+        IdentificationConfidence::Likely
+    } else {
+        IdentificationConfidence::Certain
+    };
     if let Some(src) = source {
         rf.identification_source = Some(src.clone());
     }
@@ -690,7 +955,6 @@ fn first_source(sources: &[String]) -> Option<IdentificationSource> {
         "musicbrainz" => IdentificationSource::MusicBrainz,
         "discogs" => IdentificationSource::Discogs,
         "itunes" => IdentificationSource::ITunes,
-        "amazon" => IdentificationSource::Amazon,
         "tower" => IdentificationSource::Tower,
         other => IdentificationSource::Other(other.to_string()),
     })

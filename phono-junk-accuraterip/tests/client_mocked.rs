@@ -8,7 +8,7 @@
 //! response-dispatch layer.
 
 use httpmock::prelude::*;
-use phono_junk_accuraterip::{AccurateRipClient, AccurateRipError, ExpectedCrc};
+use phono_junk_accuraterip::{AccurateRipClient, AccurateRipError, ExpectedChecksum};
 use phono_junk_identify::HttpClient;
 use url::Url;
 
@@ -56,10 +56,10 @@ fn status_200_parses_body() {
     assert_eq!(parsed.responses.len(), 1);
     assert_eq!(
         parsed.responses[0].tracks[0],
-        ExpectedCrc {
+        ExpectedChecksum {
             confidence: 7,
-            v1: 0xdead_beef,
-            v2: 0xcafe_f00d,
+            checksum: 0xdead_beef,
+            checksum_450: 0xcafe_f00d,
         }
     );
 }

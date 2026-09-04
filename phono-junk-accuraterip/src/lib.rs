@@ -13,8 +13,8 @@
 //!
 //! Identification is *not* this crate's job — see `phono-junk-identify`
 //! and its providers. AccurateRip answers "is this rip bit-perfect?",
-//! not "what is this disc?". Combining the two is orchestrated by
-//! `phono-junk-lib` once the aggregator (Sprint 11) lands.
+//! not "what is this disc?". `phono-junk-lib` orchestrates the two while
+//! persisting their evidence independently.
 
 use std::path::Path;
 
@@ -25,15 +25,25 @@ pub mod client;
 pub mod crc;
 pub mod dbar;
 pub mod error;
+pub mod offset;
 pub mod url;
 pub mod verify;
 
-pub use client::AccurateRipClient;
-pub use crc::{SKIP_SAMPLES, TrackCrc, TrackPosition, skip_bounds, track_crc_streaming};
-pub use dbar::{DbarFile, DbarResponse, ExpectedCrc};
+pub use client::{AccurateRipClient, FetchedDbar};
+pub use crc::{
+    SKIP_SAMPLES, TrackCrc, TrackPosition, skip_bounds, track_crc_samples, track_crc_streaming,
+};
+pub use dbar::{DbarFile, DbarResponse, ExpectedChecksum};
 pub use error::AccurateRipError;
+pub use offset::{
+    DiscTrackSamples, OffsetCandidate, VerificationOptions, VerificationStatus,
+    VerificationSummary, verify_with_offsets,
+};
 pub use url::{ACCURATERIP_HOST, dbar_url};
-pub use verify::{CrcMatch, TrackVerification, verify_disc, verify_track};
+pub use verify::{
+    ChecksumVersion, CrcMatch, TrackVerification, TrackVerificationStatus, verify_disc,
+    verify_track,
+};
 
 /// Compute AccurateRip CRC v1 and v2 for an audio track in a CUE image.
 /// Handles both single-BIN whole-disc and multi-BIN per-track rips

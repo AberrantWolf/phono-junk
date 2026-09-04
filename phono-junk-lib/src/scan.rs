@@ -47,23 +47,30 @@ pub enum ScanKind {
     Chd,
 }
 
-#[derive(Debug, Clone)]
-pub struct ScanOpts {
-    pub force_refresh: bool,
-    /// When `true`, [`PhonoContext::scan_library`] and [`ingest_path`]
-    /// run provider identification inline after metadata lands. When
-    /// `false`, metadata is ingested and the row is left in
-    /// [`IdentificationState::Queued`] for a later identify pass (the
-    /// GUI's background worker drains this state; CLI's `--no-identify`
-    /// flag leaves rows for a future `identify --queued` call).
-    pub identify: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentificationDisposition {
+    MetadataOnly,
+    Queue,
+    Inline,
 }
 
-impl Default for ScanOpts {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshPolicy {
+    UseCache,
+    Force,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScanRequest {
+    pub refresh: RefreshPolicy,
+    pub identification: IdentificationDisposition,
+}
+
+impl Default for ScanRequest {
     fn default() -> Self {
         Self {
-            force_refresh: false,
-            identify: true,
+            refresh: RefreshPolicy::UseCache,
+            identification: IdentificationDisposition::Inline,
         }
     }
 }
@@ -187,7 +194,7 @@ pub fn ingest_metadata(
     ctx: &PhonoContext,
     conn: &Connection,
     path: &Path,
-    opts: &ScanOpts,
+    opts: &ScanRequest,
 ) -> Result<MetadataOutcome, ScanError> {
     let _ = ctx; // reserved for future use (e.g. per-host HTTP cache warmup)
     let meta = std::fs::metadata(path)?;
@@ -200,7 +207,7 @@ pub fn ingest_metadata(
     // refresh path and bail. Bug 2 fix — the old early-return skipped
     // sidecar collection entirely, which meant a log added after the
     // initial scan was never surfaced.
-    if !opts.force_refresh
+    if opts.refresh != RefreshPolicy::Force
         && let Some(existing) = cache::lookup_cached(conn, path, mtime, size)?
         && let Some(disc_id) = existing.disc_id
     {
@@ -242,7 +249,9 @@ pub fn ingest_metadata(
         .ok()
         .flatten()
         .map(|rf| rf.identification_state);
-    let new_state = if opts.identify || opts.force_refresh {
+    let new_state = if opts.identification != IdentificationDisposition::MetadataOnly
+        || opts.refresh == RefreshPolicy::Force
+    {
         IdentificationState::Queued
     } else {
         // Keep whatever state the row is in if it's already been identified
@@ -262,6 +271,7 @@ pub fn ingest_metadata(
         identification_source: None,
         accuraterip_status: None,
         last_verified_at: None,
+        inferred_sample_shift: None,
         last_identify_errors: None,
         last_identify_at: None,
         provenance: sidecar_data.provenance.clone(),
@@ -387,7 +397,7 @@ pub fn ingest_path(
     ctx: &PhonoContext,
     conn: &Connection,
     path: &Path,
-    opts: &ScanOpts,
+    opts: &ScanRequest,
 ) -> Result<IngestOutcome, ScanError> {
     match ingest_metadata(ctx, conn, path, opts)? {
         MetadataOutcome::Cached {
@@ -399,10 +409,10 @@ pub fn ingest_path(
             disc_id,
         }),
         MetadataOutcome::Ingested { rip_file_id, .. } => {
-            if !opts.identify {
+            if opts.identification != IdentificationDisposition::Inline {
                 return Ok(IngestOutcome::ScannedOnly { rip_file_id });
             }
-            let disc = identify_one(ctx, conn, rip_file_id, opts.force_refresh)?;
+            let disc = identify_one(ctx, conn, rip_file_id, opts.refresh == RefreshPolicy::Force)?;
             Ok(IngestOutcome::Identified { rip_file_id, disc })
         }
     }
@@ -450,17 +460,35 @@ impl PhonoContext {
         &self,
         conn: &Connection,
         root: &Path,
-        opts: ScanOpts,
-        mut progress: F,
+        opts: ScanRequest,
+        progress: F,
     ) -> Result<ScanSummary, ScanError>
     where
         F: FnMut(ScanEvent<'_>),
+    {
+        self.scan_library_cancellable(conn, root, opts, progress, || false)
+    }
+
+    pub(crate) fn scan_library_cancellable<F, C>(
+        &self,
+        conn: &Connection,
+        root: &Path,
+        opts: ScanRequest,
+        mut progress: F,
+        mut cancelled: C,
+    ) -> Result<ScanSummary, ScanError>
+    where
+        F: FnMut(ScanEvent<'_>),
+        C: FnMut() -> bool,
     {
         if !root.is_dir() {
             return Err(ScanError::NotADirectory(root.to_path_buf()));
         }
         let mut summary = ScanSummary::default();
         for entry_r in WalkDir::new(root).follow_links(false) {
+            if cancelled() {
+                break;
+            }
             let entry = entry_r?;
             if !entry.file_type().is_file() {
                 continue;
@@ -494,7 +522,8 @@ impl PhonoContext {
                     });
                     (
                         rip_file_id,
-                        state == IdentificationState::Queued && opts.identify,
+                        state == IdentificationState::Queued
+                            && opts.identification == IdentificationDisposition::Inline,
                     )
                 }
                 Err(e) => {
@@ -510,7 +539,12 @@ impl PhonoContext {
                 continue;
             }
 
-            match identify_one(self, conn, rip_file_id, opts.force_refresh) {
+            match identify_one(
+                self,
+                conn,
+                rip_file_id,
+                opts.refresh == RefreshPolicy::Force,
+            ) {
                 Ok(disc) => {
                     if disc.identified {
                         summary.identified += 1;
